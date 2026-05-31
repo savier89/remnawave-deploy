@@ -931,16 +931,57 @@ step_create_admin() {
     echo ""
     ok "Panel is ready!"
     echo ""
-    echo "=========================================="
-    echo "  Create Admin User"
-    echo "=========================================="
-    echo ""
-    echo " 1. Open: https://$PANEL_DOMAIN"
-    echo " 2. Create admin account (first user = superadmin)"
-    echo " 3. Press Enter when done"
-    echo ""
-    read -r -p "Press Enter after creating admin... "
-    ok "Admin created"
+
+    # Prompt for admin credentials
+    local admin_user admin_pass admin_pass_confirm
+    prompt admin_user "admin" "Admin username"
+    prompt admin_pass "" "Admin password"
+    prompt admin_pass_confirm "" "Confirm admin password"
+
+    if [[ -z "$admin_user" || -z "$admin_pass" ]]; then
+        err "Admin credentials are required"
+    fi
+
+    if [[ "$admin_pass" != "$admin_pass_confirm" ]]; then
+        err "Passwords do not match"
+    fi
+
+    # Try to create admin via API /api/auth/register
+    log "Creating admin user via API..."
+    local response
+    response=$(curl -s -w "\n%{http_code}" "https://$PANEL_DOMAIN/api/auth/register" \
+        --resolve "$PANEL_DOMAIN:443:127.0.0.1" \
+        --insecure \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$admin_user\",\"password\":\"$admin_pass\",\"email\":\"$EMAIL\"}" 2>/dev/null || echo -e "\n000")
+
+    local http_code
+    http_code=$(echo "$response" | tail -1)
+    local body
+    body=$(echo "$response" | head -n -1)
+
+    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+        ok "Admin user '$admin_user' created successfully"
+        echo ""
+        log "Login: https://$PANEL_DOMAIN"
+        log "Username: $admin_user"
+        log "Password: $admin_pass"
+    else
+        # Fallback to manual creation if API fails
+        warn "API registration failed ($http_code). Creating manually..."
+        echo ""
+        echo "=========================================="
+        echo "  Create Admin User Manually"
+        echo "=========================================="
+        echo ""
+        echo " 1. Open: https://$PANEL_DOMAIN"
+        echo " 2. Create admin account (first user = superadmin)"
+        echo " 3. Press Enter when done"
+        echo ""
+        read -r -p "Press Enter after creating admin... "
+        ok "Admin created"
+    fi
 }
 
 # ============================================================
