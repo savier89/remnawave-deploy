@@ -29,20 +29,29 @@ jobs:
 
       - name: Validate docker-compose YAML
         run: |
-          # Extract docker-compose blocks from deploy.sh and validate
-          python3 -c "
+          # Extract docker-compose heredoc blocks from deploy.sh and validate
+          python3 << 'PYEOF'
           import yaml
-          import re
           import sys
 
           with open('deploy.sh') as f:
-              content = f.read()
+              lines = f.readlines()
 
-          # Find heredoc blocks for docker-compose
-          blocks = re.findall(r'cat > [^\"\\n]+docker-compose\\.yml <<EOF\\n(.*?)EOF', content, re.DOTALL)
+          blocks = []
+          current_block = None
+          for line in lines:
+              if 'docker-compose.yml' in line and 'cat' in line and '<<EOF' in line:
+                  current_block = []
+              elif current_block is not None:
+                  if line.strip() == 'EOF':
+                      blocks.append(''.join(current_block))
+                      current_block = None
+                  else:
+                      current_block.append(line)
+
           if not blocks:
-              print('No docker-compose blocks found (expected in heredoc)')
-              sys.exit(0)
+              print('No docker-compose blocks found')
+              sys.exit(1)
 
           for i, block in enumerate(blocks):
               try:
@@ -54,7 +63,7 @@ jobs:
               except Exception as e:
                   print(f'Block {i}: INVALID - {e}')
                   sys.exit(1)
-          "
+          PYEOF
 
       - name: Check for hardcoded secrets
         run: |
