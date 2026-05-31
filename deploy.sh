@@ -1690,18 +1690,73 @@ CREDS
         echo " IMPORTANT: Delete this file after first login!"
         echo "=========================================="
     elif [[ "$http_code" == "403" ]]; then
-        warn "Registration is disabled (403 Forbidden)"
+        warn "Registration is disabled (403 Forbidden) - admin already exists"
         echo ""
         echo "=========================================="
-        echo "  Create Admin User Manually"
+        echo "  Admin Account Already Exists"
         echo "=========================================="
         echo ""
-        echo " 1. Open: https://$PANEL_DOMAIN"
-        echo " 2. Create admin account (first user = superadmin)"
-        echo " 3. Press Enter when done"
+        echo " Options:"
+        echo " 1) Create admin manually via browser"
+        echo " 2) Reset superadmin via Rescue CLI (removes existing admin)"
+        echo " 3) Skip admin creation"
         echo ""
-        read -r -p "Press Enter after creating admin... "
-        ok "Admin created"
+        read -r -p "Choose option [1/2/3]: " admin_choice
+
+        case "$admin_choice" in
+            1)
+                echo ""
+                echo " 1. Open: https://$PANEL_DOMAIN"
+                echo " 2. Create admin account (first user = superadmin)"
+                echo " 3. Press Enter when done"
+                echo ""
+                read -r -p "Press Enter after creating admin... "
+                ok "Admin created"
+                ;;
+            2)
+                echo ""
+                echo "=========================================="
+                echo "  Reset Superadmin via Rescue CLI"
+                echo "=========================================="
+                echo ""
+                echo " This will remove the existing superadmin account."
+                echo " After reset, you can create a new one via browser."
+                echo ""
+                read -r -p "Are you sure? [y/N]: " confirm_reset
+                if [[ "$confirm_reset" =~ ^[Yy]$ ]]; then
+                    log "Resetting superadmin via Rescue CLI..."
+                    docker exec -it remnawave cli <<'EOF'
+reset superadmin
+exit
+EOF
+                    if [[ $? -eq 0 ]]; then
+                        ok "Superadmin reset successful"
+                        echo ""
+                        echo " 1. Open: https://$PANEL_DOMAIN"
+                        echo " 2. Create new admin account"
+                        echo " 3. Press Enter when done"
+                        echo ""
+                        read -r -p "Press Enter after creating new admin... "
+                        ok "New admin created"
+                    else
+                        warn "Rescue CLI failed - try manual reset"
+                        echo ""
+                        echo " Manual reset command:"
+                        echo " docker exec -it remnawave cli"
+                        echo " Then choose: 'Reset superadmin'"
+                        echo ""
+                    fi
+                else
+                    info "Skipping admin reset"
+                fi
+                ;;
+            3)
+                info "Skipping admin creation"
+                ;;
+            *)
+                warn "Invalid option, skipping"
+                ;;
+        esac
     elif [[ "$http_code" == "400" ]]; then
         warn "Validation error (400): $body"
         echo ""
