@@ -43,6 +43,12 @@ jobs:
           grep -rn 'xox[baprs]-[a-zA-Z0-9-]\{10,\}' . && echo "FOUND: Slack token" && exit 1 || true
           echo "No hardcoded secrets found"
 
+      - name: Run API tests
+        run: |
+          chmod +x tests/test_admin_api.sh
+          bash tests/test_admin_api.sh
+        continue-on-error: false
+
       - name: Check for real domains/IPs
         run: |
           # Allow only placeholder domains

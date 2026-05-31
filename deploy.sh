@@ -302,7 +302,8 @@ step_check_previous() {
 
     # 9. Docker system prune (dangling)
     log "Pruning dangling Docker data..."
-    run "docker system prune -f"
+    # Only prune dangling objects older than 24h to avoid affecting other projects
+    run "docker system prune -f --filter 'until=24h' 2>/dev/null || docker system prune -f"
 
     ok "Full cleanup complete"
 }
@@ -346,7 +347,7 @@ step_prerequisites() {
     # Install acme.sh per official docs
     if ! command -v acme.sh &>/dev/null; then
         DEBIAN_FRONTEND=noninteractive run "apt-get install -y -qq cron socat"
-        run "curl https://get.acme.sh | sh -s email=$EMAIL"
+        run "curl https://get.acme.sh | sh -s email='$EMAIL'"
         source ~/.bashrc 2>/dev/null || true
 
         # Verify acme.sh cron job exists
@@ -421,9 +422,12 @@ step_ufw() {
     # Node-specific rules
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         # Node API port (Panel → Node communication)
-        if [[ "$NODE_PORT" != "2222" ]] && ! ufw status | grep -q "${NODE_PORT}.*ALLOW"; then
-            run "ufw allow ${NODE_PORT}/tcp"
-            ok "UFW: Node API (${NODE_PORT}/tcp) allowed"
+        # For node-only: always open. For panel+node: only if non-default (internal otherwise).
+        if [[ "$ROLE" == "node" ]] || [[ "$ROLE" == "panel+node" && "$NODE_PORT" != "2222" ]]; then
+            if ! ufw status | grep -q "${NODE_PORT}.*ALLOW"; then
+                run "ufw allow ${NODE_PORT}/tcp"
+                ok "UFW: Node API (${NODE_PORT}/tcp) allowed"
+            fi
         fi
         # Node nginx on port 4433 (panel+node mode)
         if [[ "$ROLE" == "panel+node" ]]; then
@@ -695,20 +699,20 @@ EOF
     cat > "$pd/docker-compose.yml" <<EOF
 services:
   remnawave-panel-nginx:
-     image: macbre/nginx-http3:latest
-     container_name: remnawave-panel-nginx
-     hostname: remnawave-panel-nginx
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
-      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
-    ports:
-      - "${nginx_bind}:443:443/tcp"
-      - "${nginx_bind}:443:443/udp"
-    restart: always
-    networks:
-      - remnawave-network
+      image: macbre/nginx-http3:latest
+      container_name: remnawave-panel-nginx
+      hostname: remnawave-panel-nginx
+      volumes:
+        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+        - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+        - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
+        - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+      ports:
+        - "${nginx_bind}:443:443/tcp"
+        - "${nginx_bind}:443:443/udp"
+      restart: always
+      networks:
+        - remnawave-network
 networks:
   remnawave-network:
     name: remnawave-network
@@ -806,15 +810,14 @@ services:
       image: macbre/nginx-http3:latest
       container_name: remnawave-node-nginx
       volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./stub.html:/var/www/html/index.html:ro
-      - /opt/remnanode/ssl:/etc/nginx/ssl:ro
-      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
-      - /dev/shm:/dev/shm:ro
-    ports:
-      - "4433:443/tcp"
-      - "4433:443/udp"
-    restart: always
+        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+        - ./stub.html:/var/www/html/index.html:ro
+        - /opt/remnanode/ssl:/etc/nginx/ssl:ro
+        - /dev/shm:/dev/shm:ro
+      ports:
+        - "4433:443/tcp"
+        - "4433:443/udp"
+      restart: always
 EOF
         warn "Node Nginx binds to port 4433 (panel+node mode)"
         warn "Configure firewall: redirect external 443 -> 4433, or use SNAT"
@@ -826,13 +829,12 @@ services:
       image: macbre/nginx-http3:latest
       container_name: remnawave-node-nginx
       network_mode: host
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./stub.html:/var/www/html/index.html:ro
-      - /opt/remnanode/ssl:/etc/nginx/ssl:ro
-      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
-      - /dev/shm:/dev/shm:ro
-    restart: always
+      volumes:
+        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+        - ./stub.html:/var/www/html/index.html:ro
+        - /opt/remnanode/ssl:/etc/nginx/ssl:ro
+        - /dev/shm:/dev/shm:ro
+      restart: always
 EOF
     fi
 
@@ -1130,17 +1132,22 @@ step_create_admin() {
         err "Passwords do not match"
     fi
 
-    # Try to create admin via API /api/auth/register
+    # Create admin via API per OpenAPI spec:
+    # POST /api/auth/register
+    # Body: { "username": "string", "password": "string" }
+    # Response: { "response": { "accessToken": "string" } }
+    # 403: Registration is not allowed
     log "Creating admin user via API..."
     dbg "POST https://$PANEL_DOMAIN/api/auth/register"
-    dbg "Body: {\"username\":\"$admin_user\",\"password\":\"****\",\"email\":\"$EMAIL\"}"
+    dbg "Body: {\"username\":\"$admin_user\",\"password\":\"****\"}"
+
     local response
     response=$(curl -s -w "\n%{http_code}" "https://$PANEL_DOMAIN/api/auth/register" \
         --resolve "$PANEL_DOMAIN:443:127.0.0.1" \
         --insecure \
         -X POST \
         -H "Content-Type: application/json" \
-        -d "{\"username\":\"$admin_user\",\"password\":\"$admin_pass\",\"email\":\"$EMAIL\"}" 2>/dev/null || echo -e "\n000")
+        -d "{\"username\":\"$admin_user\",\"password\":\"$admin_pass\"}" 2>/dev/null || echo -e "\n000")
 
     local http_code
     http_code=$(echo "$response" | tail -1)
@@ -1150,14 +1157,35 @@ step_create_admin() {
     dbg "Admin API body: $body"
 
     if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
-        ok "Admin user '$admin_user' created successfully"
+        # Extract accessToken from response per spec
+        local access_token
+        access_token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin)['response']['accessToken'])" 2>/dev/null || true)
+
+        if [[ -n "$access_token" ]]; then
+            ok "Admin user '$admin_user' created successfully"
+            dbg "Access token received (length: ${#access_token})"
+        else
+            ok "Admin user '$admin_user' created (token parse skipped)"
+        fi
         echo ""
         log "Login: https://$PANEL_DOMAIN"
         log "Username: $admin_user"
         log "Password: $admin_pass"
+    elif [[ "$http_code" == "403" ]]; then
+        warn "Registration is disabled (403 Forbidden)"
+        echo ""
+        echo "=========================================="
+        echo "  Create Admin User Manually"
+        echo "=========================================="
+        echo ""
+        echo " 1. Open: https://$PANEL_DOMAIN"
+        echo " 2. Create admin account (first user = superadmin)"
+        echo " 3. Press Enter when done"
+        echo ""
+        read -r -p "Press Enter after creating admin... "
+        ok "Admin created"
     else
-        # Fallback to manual creation if API fails
-        warn "API registration failed ($http_code). Creating manually..."
+        warn "API registration failed ($http_code): $body"
         echo ""
         echo "=========================================="
         echo "  Create Admin User Manually"
