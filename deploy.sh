@@ -1733,7 +1733,7 @@ CREDS
                     fi
 
                     # Use expect to automate the interactive Rescue CLI
-                    expect <<'EXPECT_SCRIPT'
+                    if expect <<'EXPECT_SCRIPT'
 spawn docker exec -it remnawave cli
 expect {
     "Reset superadmin" { send "1\r"; exp_continue }
@@ -1753,8 +1753,7 @@ expect {
 }
 expect eof
 EXPECT_SCRIPT
-
-                    if [[ $? -eq 0 ]]; then
+                    then
                         ok "Superadmin reset successful"
                         echo ""
                         echo " 1. Open: https://$PANEL_DOMAIN"
