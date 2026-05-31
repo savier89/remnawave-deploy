@@ -8,6 +8,17 @@ cleanup() {
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         warn "Script exited with code $rc"
+        if $DEBUG; then
+            dbg "=== Error state dump ==="
+            dbg "ROLE=$ROLE, DRY_RUN=$DRY_RUN, FORCE=$FORCE, STAGING=$STAGING"
+            dbg "NODE_DOMAIN=${NODE_DOMAIN:-<unset>}, PANEL_DOMAIN=${PANEL_DOMAIN:-<unset>}, NODE_PORT=${NODE_PORT:-<unset>}"
+            dbg "SUB_DOMAIN=${SUB_DOMAIN:-<unset>}, SUB_PUBLIC_DOMAIN=${SUB_PUBLIC_DOMAIN:-<unset>}, PANEL_HOST=${PANEL_HOST:-<unset>}"
+            dbg "EMAIL=${EMAIL:-<unset>}"
+            dbg "Docker containers:"
+            docker ps -a --format "{{.Names}} {{.Status}} {{.Image}}" 2>/dev/null | while read -r line; do dbg "  $line"; done
+            dbg "Docker network:"
+            docker network ls 2>/dev/null | while read -r line; do dbg "  $line"; done
+        fi
     fi
     [[ -n "${LOCKFILE:-}" && -f "$LOCKFILE" ]] && rm -f "$LOCKFILE"
     trap - EXIT ERR INT TERM
@@ -26,14 +37,38 @@ trap cleanup EXIT ERR INT TERM
 #   panel+node  - Panel + Node + both Nginx
 
 # Colors
-R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; N='\033[0m'
+R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; N='\033[0m'; M='\033[0;35m'
 log()  { echo -e "${B}[deploy]${N} $*"; }
 ok()   { echo -e "${G}[OK]${N} $*"; }
 warn() { echo -e "${Y}[WARN]${N} $*"; }
 err()  { echo -e "${R}[ERR]${N} $*"; exit 1; }
 
+# Debug logging — prints to stderr + optional file
+dbg() {
+    if $DEBUG; then
+        local msg="${M}[DEBUG]${N} $(date '+%H:%M:%S') $*"
+        echo -e "$msg" >&2
+        if [[ -n "$DEBUG_FILE" ]]; then
+            echo "[DEBUG] $(date '+%H:%M:%S') $*" >> "$DEBUG_FILE"
+        fi
+    fi
+}
+
+# Dump variable values for debugging
+debug_vars() {
+    if $DEBUG; then
+        local label="$1"; shift
+        dbg "--- $label ---"
+        for var in "$@"; do
+            local val="${!var:-<unset>}"
+            dbg "  $var = $val"
+        done
+    fi
+}
+
 # Defaults
 DRY_RUN=false; FORCE=false; STAGING=false
+DEBUG=false; DEBUG_FILE=""
 NODE_PORT=2222
 
 usage() {
@@ -49,8 +84,10 @@ Options:
   --dry-run           Show commands only
   --force             Skip confirmation
   --staging           Use Let's Encrypt staging CA (higher rate limits)
+  --debug             Enable debug mode (verbose output, set -x)
+  --debug-file FILE   Write debug log to FILE (implies --debug)
 EOF
-    exit 1
+    exit ${1:-0}
 }
 
 # Parse args
@@ -61,13 +98,17 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=true; shift ;;
         --force) FORCE=true; shift ;;
         --staging) STAGING=true; shift ;;
+        --debug) DEBUG=true; shift ;;
+        --debug-file) DEBUG=true; DEBUG_FILE="$2"; shift 2 ;;
+        --help|-h) usage 0 ;;
         --*) err "Unknown: $1" ;;
         *) err "Unexpected: $1" ;;
     esac
 done
-[[ -z "$ROLE" ]] && usage
+[[ -z "$ROLE" ]] && usage 1
 
 run() {
+    dbg "EXEC: $*"
     if $DRY_RUN; then log "DRY: $*"; else log "$*"; "$@"; fi
 }
 confirm() {
@@ -127,6 +168,7 @@ step_config() {
     fi
     [[ "$ROLE" == "node" ]] && log "  Panel IP:         $PANEL_HOST"
     log "  Email:            $EMAIL"
+    debug_vars "Config" ROLE EMAIL NODE_DOMAIN NODE_PORT PANEL_DOMAIN SUB_DOMAIN SUB_PUBLIC_DOMAIN PANEL_HOST
     echo ""
     confirm "Apply this configuration?"
 }
@@ -188,6 +230,7 @@ step_check_previous() {
         return 0
     fi
 
+    dbg "Previous install found: dirs=$found, containers=$containers, volumes=$volumes, networks=$networks, images=$images"
     echo ""
     warn "Previous installation detected — full cleanup"
     confirm "Remove ALL Remnawave/Remnanode data?" || err "Aborted"
@@ -270,16 +313,20 @@ step_prerequisites() {
     log "=== Prerequisites ==="
 
     if ! command -v docker &>/dev/null; then
+        dbg "Docker not found, installing..."
         run "curl -fsSL https://get.docker.com | sh"
         ok "Docker installed"
     else
         ok "Docker already installed"
+        dbg "Docker version: $(docker --version 2>/dev/null || echo 'unknown')"
     fi
 
     # Verify Docker daemon is actually running
     docker info &>/dev/null || err "Docker daemon is not running or not accessible"
+    dbg "Docker daemon OK"
 
     docker compose version &>/dev/null || err "Docker Compose not found"
+    dbg "Docker Compose version: $(docker compose version 2>/dev/null || echo 'unknown')"
 
     for cmd in curl openssl; do
         command -v "$cmd" &>/dev/null || DEBIAN_FRONTEND=noninteractive run "apt-get update -qq && apt-get install -y -qq $cmd"
@@ -346,10 +393,14 @@ step_ssl() {
     # Issue certificate per official docs
     local acme_server="https://acme-v02.api.letsencrypt.org/directory"
     $STAGING && acme_server="https://acme-staging-v02.api.letsencrypt.org/directory"
+    dbg "acme.sh server: $acme_server"
+    dbg "acme.sh command: acme.sh --issue --standalone -d '$domain' --key-file '$key' --fullchain-file '$pem' --alpn --tlsport 8443 --force --server '$acme_server'"
     run "acme.sh --issue --standalone -d '$domain' \
         --key-file '$key' --fullchain-file '$pem' \
         --alpn --tlsport 8443 --force \
         --server '$acme_server'"
+    dbg "SSL key exists: $(ls -la '$key' 2>/dev/null || echo 'MISSING')"
+    dbg "SSL cert exists: $(ls -la '$pem' 2>/dev/null || echo 'MISSING')"
 
     # Determine correct nginx container for reload
     # Panel nginx is 'remnawave-panel-nginx', Node nginx is 'remnawave-node-nginx'
@@ -381,8 +432,11 @@ step_panel() {
     run "curl -o $pd/.env https://raw.githubusercontent.com/remnawave/backend/refs/heads/main/.env.sample"
 
     # Step 2: Generate secrets (exact commands from official docs)
+    dbg "Panel .env path: $pd/.env"
     if ! $DRY_RUN; then
+        dbg "Generating JWT_AUTH_SECRET (hex 64)"
         sed -i "s/^JWT_AUTH_SECRET=.*/JWT_AUTH_SECRET=$(openssl rand -hex 64)/" "$pd/.env"
+        dbg "Generating JWT_API_TOKENS_SECRET (hex 64)"
         sed -i "s/^JWT_API_TOKENS_SECRET=.*/JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)/" "$pd/.env"
     else
         log "DRY: sed -i s/^JWT_AUTH_SECRET=.../"
@@ -428,8 +482,15 @@ step_panel() {
     # Add SSL volume for Panel (per docs: mount /opt/remnawave/nginx as SSL source)
     # This lets Panel read certs and push them to Node during config updates
     if ! $DRY_RUN && ! grep -q "/var/lib/remnawave/configs/xray/ssl" "$pd/docker-compose.yml"; then
+        dbg "Adding SSL volume mount to docker-compose.yml"
         sed -i '/^  remnawave:/,/^[^ ]/{/volumes:/a\      - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl:ro
 }' "$pd/docker-compose.yml"
+    fi
+
+    # Debug: show final .env state (masking secrets)
+    if $DEBUG; then
+        dbg "--- Panel .env (secrets masked) ---"
+        grep -E '^(JWT_AUTH_SECRET|JWT_API_TOKENS_SECRET|METRICS_PASS|WEBHOOK_SECRET_HEADER|POSTGRES_PASSWORD|DATABASE_URL|FRONT_END_DOMAIN|SUB_PUBLIC_DOMAIN|PANEL_DOMAIN)=' "$pd/.env" 2>/dev/null | sed 's/=.*/=****/' | while read -r line; do dbg "  $line"; done
     fi
 
     ok "Panel configured in $pd (per official docs)"
@@ -453,6 +514,7 @@ step_panel_nginx() {
     if [[ "$ROLE" == "panel+node" ]]; then
         nginx_bind="127.0.0.1"
     fi
+    dbg "Panel nginx bind: $nginx_bind (ROLE=$ROLE)"
 
     # nginx.conf - EXACT template from official docs + enhancements
     cat > "$pd/nginx.conf" <<EOF
@@ -592,7 +654,10 @@ step_node_nginx() {
 
     # Generate QUIC host key
     if [[ ! -f "/opt/remnanode/ssl/quic_host.key" ]]; then
+        dbg "Generating QUIC host key..."
         run "mkdir -p /opt/remnanode/ssl && openssl rand -out /opt/remnanode/ssl/quic_host.key 32"
+    else
+        dbg "QUIC host key already exists"
     fi
 
     # Stub page for HTTP/1.1 requests
@@ -653,6 +718,7 @@ EOF
     # panel+node role: use bridge mode on port 4433 to avoid conflict with panel nginx
     # node only role: use host mode (direct port 443)
     if [[ "$ROLE" == "panel+node" ]]; then
+        dbg "Node nginx: bridge mode on port 4433 (panel+node)"
         cat > "$nginx_dir/docker-compose.yml" <<EOF
 services:
   remnawave-node-nginx:
@@ -672,6 +738,7 @@ EOF
         warn "Node Nginx binds to port 4433 (panel+node mode)"
         warn "Configure firewall: redirect external 443 -> 4433, or use SNAT"
     else
+        dbg "Node nginx: host mode (node-only)"
         cat > "$nginx_dir/docker-compose.yml" <<EOF
 services:
   remnawave-node-nginx:
@@ -701,8 +768,11 @@ step_node() {
     run "mkdir -p $nd"
     run "mkdir -p /var/log/remnanode"
 
+    dbg "Node directory: $nd, ROLE: $ROLE"
+
     # For panel+node role, we need to guide the user to copy docker-compose from Panel
     if [[ "$ROLE" == "panel+node" ]]; then
+        dbg "panel+node mode: Panel is local (127.0.0.1:3000)"
         echo ""
         log "=== Node docker-compose.yml ==="
         log "Per official docs, you need to copy docker-compose.yml from Panel UI:"
@@ -749,6 +819,7 @@ step_node() {
         echo "$dc_content" > "$nd/docker-compose.yml"
     else
         # For node-only role, PANEL_HOST was already asked in step_config
+        dbg "node-only mode: PANEL_HOST=$PANEL_HOST"
         echo ""
         log "=== Node docker-compose.yml ==="
         log "Per official docs, copy docker-compose.yml from Panel UI:"
@@ -796,22 +867,29 @@ step_node() {
 step_start() {
     log "=== Starting services ==="
 
+    dbg "Starting services for role: $ROLE"
+
     # Create Docker network (needed by official docker-compose)
     if ! docker network inspect remnawave-network &>/dev/null; then
+        dbg "Creating remnawave-network..."
         run "docker network create remnawave-network"
         ok "Created remnawave-network"
     else
         ok "remnawave-network already exists"
+        dbg "remnawave-network: $(docker network inspect remnawave-network --format '{{.Driver}}' 2>/dev/null || echo 'unknown')"
     fi
 
     # Panel (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/docker-compose.yml" ]]; then
+            dbg "Panel docker-compose.yml exists, checking if running..."
             if docker ps --format "{{.Names}}" | grep -q remnawave; then
                 warn "Panel already running, skipping"
             else
+                dbg "Starting Panel..."
                 run "cd /opt/remnawave && docker compose up -d"
                 ok "Panel started"
+                dbg "Panel containers: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave || echo 'none')"
             fi
         fi
     fi
@@ -819,11 +897,14 @@ step_start() {
     # Panel nginx (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/nginx/docker-compose.yml" ]]; then
+            dbg "Panel nginx docker-compose.yml exists, checking if running..."
             if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
                 warn "remnawave-panel-nginx already running, skipping"
             else
+                dbg "Starting Panel nginx..."
                 run "cd /opt/remnawave/nginx && docker compose up -d"
                 ok "Panel Nginx started"
+                dbg "Panel nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-panel-nginx || echo 'none')"
             fi
         fi
     fi
@@ -831,11 +912,14 @@ step_start() {
     # Node nginx (node and panel+node roles)
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnanode/nginx/docker-compose.yml" ]]; then
+            dbg "Node nginx docker-compose.yml exists, checking if running..."
             if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
                 warn "remnawave-node-nginx already running, skipping"
             else
+                dbg "Starting Node nginx..."
                 run "cd /opt/remnanode/nginx && docker compose up -d"
                 ok "Node Nginx started"
+                dbg "Node nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-node-nginx || echo 'none')"
             fi
         fi
     fi
@@ -843,11 +927,14 @@ step_start() {
     # Node (node and panel+node roles)
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnanode/docker-compose.yml" ]]; then
+            dbg "Node docker-compose.yml exists, checking if running..."
             if docker ps --format "{{.Names}}" | grep -q remnanode; then
                 warn "remnanode already running, skipping"
             else
+                dbg "Starting Node..."
                 run "cd /opt/remnanode && docker compose up -d"
                 ok "Node started"
+                dbg "Node container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnanode || echo 'none')"
             fi
         fi
     fi
@@ -858,13 +945,16 @@ step_start() {
 # ============================================================
 step_verify() {
     log "=== Verification ==="
+    dbg "Verifying services for role: $ROLE"
     docker ps --format "table {{.Names}}\t{{.Status}}"
 
     # Check Panel nginx
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
             local code
+            dbg "Checking Panel nginx: curl https://$PANEL_DOMAIN --resolve $PANEL_DOMAIN:443:127.0.0.1 --insecure"
             code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
+            dbg "Panel nginx response code: $code"
             [[ "$code" == "200" || "$code" == "301" || "$code" == "302" ]] && ok "Panel Nginx OK ($code)" || warn "Panel Nginx ($code)"
         fi
     fi
@@ -873,6 +963,8 @@ step_verify() {
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if docker ps --format "{{.Names}}" | grep -q remnawave; then
             ok "Panel running"
+            dbg "Panel logs (last 10):"
+            docker logs remnawave 2>&1 | tail -10 | while read -r line; do dbg "  $line"; done
         else
             warn "Panel not running - check: docker logs remnawave"
         fi
@@ -883,10 +975,13 @@ step_verify() {
         if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
             local code
             if [[ "$ROLE" == "panel+node" ]]; then
+                dbg "Checking Node nginx (panel+node): curl https://$NODE_DOMAIN --resolve $NODE_DOMAIN:4433:127.0.0.1 --insecure"
                 code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:4433:127.0.0.1" --insecure 2>/dev/null || echo "000")
             else
+                dbg "Checking Node nginx (node-only): curl https://$NODE_DOMAIN --insecure"
                 code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --insecure 2>/dev/null || echo "000")
             fi
+            dbg "Node nginx response code: $code"
             [[ "$code" == "200" || "$code" == "301" ]] && ok "Node Nginx OK ($code)" || warn "Node Nginx ($code)"
         fi
     fi
@@ -895,7 +990,8 @@ step_verify() {
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         if docker ps --format "{{.Names}}" | grep -q remnanode; then
             ok "Node running"
-            docker logs remnanode 2>&1 | tail -5
+            dbg "Node logs (last 5):"
+            docker logs remnanode 2>&1 | tail -5 | while read -r line; do dbg "  $line"; done
         else
             warn "Node not running - check: docker logs remnanode"
         fi
@@ -907,6 +1003,7 @@ step_verify() {
 # ============================================================
 step_create_admin() {
     log "=== Create Admin ==="
+    dbg "Creating admin for Panel at: https://$PANEL_DOMAIN"
 
     # Wait for Panel to be ready
     local retries=12
@@ -915,7 +1012,9 @@ step_create_admin() {
 
     for i in $(seq 1 $retries); do
         local code
+        dbg "Waiting for Panel... attempt $i/$retries"
         code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
+        dbg "Panel health check: HTTP $code"
         if [[ "$code" != "000" ]]; then
             ready=true
             break
@@ -925,6 +1024,10 @@ step_create_admin() {
     done
 
     if ! $ready; then
+        dbg "Panel health check failed after $retries attempts. Container status:"
+        docker ps -a --format "{{.Names}} {{.Status}}" | grep remnawave | while read -r line; do dbg "  $line"; done
+        dbg "Panel container logs (last 20):"
+        docker logs remnawave 2>&1 | tail -20 | while read -r line; do dbg "  $line"; done
         err "Panel did not start in time. Check: docker logs remnawave"
     fi
 
@@ -948,6 +1051,8 @@ step_create_admin() {
 
     # Try to create admin via API /api/auth/register
     log "Creating admin user via API..."
+    dbg "POST https://$PANEL_DOMAIN/api/auth/register"
+    dbg "Body: {\"username\":\"$admin_user\",\"password\":\"****\",\"email\":\"$EMAIL\"}"
     local response
     response=$(curl -s -w "\n%{http_code}" "https://$PANEL_DOMAIN/api/auth/register" \
         --resolve "$PANEL_DOMAIN:443:127.0.0.1" \
@@ -960,6 +1065,8 @@ step_create_admin() {
     http_code=$(echo "$response" | tail -1)
     local body
     body=$(echo "$response" | head -n -1)
+    dbg "Admin API response: HTTP $http_code"
+    dbg "Admin API body: $body"
 
     if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
         ok "Admin user '$admin_user' created successfully"
@@ -989,8 +1096,10 @@ step_create_admin() {
 # ============================================================
 step_logrotate() {
     log "=== Logrotate for Node ==="
+    dbg "Configuring logrotate for /var/log/remnanode/"
 
     if ! command -v logrotate &>/dev/null; then
+        dbg "logrotate not found, installing..."
         run "apt-get install -y logrotate"
     fi
 
@@ -1018,55 +1127,84 @@ main() {
     exec 200>"$LOCKFILE"
     flock -n 200 || err "Another instance is already running (lock: $LOCKFILE)"
 
+    # Debug mode setup
+    if $DEBUG; then
+        warn "DEBUG MODE ENABLED"
+        if [[ -n "$DEBUG_FILE" ]]; then
+            echo "=== Deploy Debug Log ===" > "$DEBUG_FILE"
+            echo "Started: $(date)" >> "$DEBUG_FILE"
+            echo "Role: $ROLE" >> "$DEBUG_FILE"
+            echo "PID: $$" >> "$DEBUG_FILE"
+            echo "" >> "$DEBUG_FILE"
+        fi
+        set -x
+    fi
+
     log "Deploy: $ROLE"
     $DRY_RUN && warn "DRY RUN"
     $STAGING && warn "STAGING MODE — using Let's Encrypt staging CA"
 
+    debug_vars "Runtime" DRY_RUN FORCE STAGING DEBUG DEBUG_FILE ROLE NODE_PORT
+
+    dbg "=== Step 0: Configuration ==="
     step_config
+    dbg "=== Step -1: Check previous ==="
     step_check_previous
+    dbg "=== Step 1: Prerequisites ==="
     step_prerequisites
 
     # SSL certificates
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         # Panel SSL (per docs: cert in /opt/remnawave/nginx)
+        dbg "=== Step 2: SSL for Panel ($PANEL_DOMAIN) ==="
         step_ssl "$PANEL_DOMAIN" "/opt/remnawave/nginx"
     fi
 
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         # Node SSL
+        dbg "=== Step 2: SSL for Node ($NODE_DOMAIN) ==="
         step_ssl "$NODE_DOMAIN" "/opt/remnanode/ssl"
     fi
 
     # Separate subdomain SSL (when subscription domain differs from panel domain)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+            dbg "=== Step 2: SSL for SUB ($SUB_DOMAIN) ==="
             step_ssl "$SUB_DOMAIN" "/opt/remnawave/nginx/sub"
         fi
     fi
 
     # Panel components (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
+        dbg "=== Step 3: Panel ==="
         step_panel
+        dbg "=== Step 4: Panel Nginx ==="
         step_panel_nginx
     fi
 
     # Node components (node and panel+node roles)
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
+        dbg "=== Step 5: Node Nginx ==="
         step_node_nginx
+        dbg "=== Step 6: Node ==="
         step_node
     fi
 
     # Start everything
+    dbg "=== Step 7: Start ==="
     step_start
+    dbg "=== Step 8: Verify ==="
     step_verify
 
     # Create admin for panel role
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
+        dbg "=== Step 9: Create Admin ==="
         step_create_admin
     fi
 
     # Logrotate for node
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
+        dbg "=== Step 10: Logrotate ==="
         step_logrotate
     fi
 
