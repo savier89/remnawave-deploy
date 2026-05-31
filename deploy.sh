@@ -46,7 +46,8 @@ err()  { echo -e "${R}[ERR]${N} $*"; exit 1; }
 # Debug logging — prints to stderr + optional file
 dbg() {
     if $DEBUG; then
-        local msg="${M}[DEBUG]${N} $(date '+%H:%M:%S') $*"
+        local msg
+        msg="${M}[DEBUG]${N} $(date '+%H:%M:%S') $*"
         echo -e "$msg" >&2
         if [[ -n "$DEBUG_FILE" ]]; then
             echo "[DEBUG] $(date '+%H:%M:%S') $*" >> "$DEBUG_FILE"
@@ -332,6 +333,16 @@ step_prerequisites() {
         command -v "$cmd" &>/dev/null || DEBIAN_FRONTEND=noninteractive run "apt-get update -qq && apt-get install -y -qq $cmd"
     done
 
+    # UFW firewall
+    if ! command -v ufw &>/dev/null; then
+        dbg "UFW not found, installing..."
+        DEBIAN_FRONTEND=noninteractive run "apt-get update -qq && apt-get install -y -qq ufw"
+        ok "UFW installed"
+    else
+        ok "UFW already installed"
+        dbg "UFW status: $(ufw status verbose 2>/dev/null | head -1 || echo 'unknown')"
+    fi
+
     # Install acme.sh per official docs
     if ! command -v acme.sh &>/dev/null; then
         DEBIAN_FRONTEND=noninteractive run "apt-get install -y -qq cron socat"
@@ -369,6 +380,76 @@ step_prerequisites() {
     fi
 
     ok "Dependencies OK"
+}
+
+# ============================================================
+# STEP 1.5: UFW Firewall Configuration
+# ============================================================
+step_ufw() {
+    log "=== UFW Firewall ==="
+
+    dbg "Configuring UFW for role: $ROLE"
+
+    # Default policies
+    run "ufw default deny incoming"
+    run "ufw default allow outgoing"
+
+    # Allow SSH (critical — don't lock ourselves out)
+    if ! ufw status | grep -q "22.*ALLOW"; then
+        run "ufw allow 22/tcp"
+        ok "UFW: SSH (22/tcp) allowed"
+    fi
+
+    # Allow HTTP for Let's Encrypt validation
+    if ! ufw status | grep -q "80.*ALLOW"; then
+        run "ufw allow 80/tcp"
+        ok "UFW: HTTP (80/tcp) allowed"
+    fi
+
+    # Allow HTTPS
+    if ! ufw status | grep -q "443.*ALLOW"; then
+        run "ufw allow 443/tcp"
+        ok "UFW: HTTPS (443/tcp) allowed"
+    fi
+
+    # Panel-specific rules
+    if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
+        # Panel web UI (behind nginx, so port 3000 is internal)
+        dbg "Panel role: port 3000 is internal (behind nginx)"
+    fi
+
+    # Node-specific rules
+    if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
+        # Node API port (Panel → Node communication)
+        if [[ "$NODE_PORT" != "2222" ]] && ! ufw status | grep -q "${NODE_PORT}.*ALLOW"; then
+            run "ufw allow ${NODE_PORT}/tcp"
+            ok "UFW: Node API (${NODE_PORT}/tcp) allowed"
+        fi
+        # Node nginx on port 4433 (panel+node mode)
+        if [[ "$ROLE" == "panel+node" ]]; then
+            if ! ufw status | grep -q "4433.*ALLOW"; then
+                run "ufw allow 4433/tcp"
+                ok "UFW: Node nginx (4433/tcp) allowed"
+            fi
+            # UDP 4433 for QUIC/HTTP3
+            if ! ufw status | grep -q "4433.*ALLOW" | grep -q udp; then
+                run "ufw allow 4433/udp"
+                ok "UFW: Node nginx QUIC (4433/udp) allowed"
+            fi
+        fi
+    fi
+
+    # Enable UFW
+    if ! ufw status | grep -q "Status: active"; then
+        log "Enabling UFW..."
+        echo "y" | run "ufw enable"
+        ok "UFW enabled"
+    else
+        ok "UFW already active"
+    fi
+
+    dbg "UFW rules:"
+    ufw status numbered 2>/dev/null | while read -r line; do dbg "  $line"; done
 }
 
 # ============================================================
@@ -1131,11 +1212,13 @@ main() {
     if $DEBUG; then
         warn "DEBUG MODE ENABLED"
         if [[ -n "$DEBUG_FILE" ]]; then
-            echo "=== Deploy Debug Log ===" > "$DEBUG_FILE"
-            echo "Started: $(date)" >> "$DEBUG_FILE"
-            echo "Role: $ROLE" >> "$DEBUG_FILE"
-            echo "PID: $$" >> "$DEBUG_FILE"
-            echo "" >> "$DEBUG_FILE"
+            {
+                echo "=== Deploy Debug Log ==="
+                echo "Started: $(date)"
+                echo "Role: $ROLE"
+                echo "PID: $$"
+                echo ""
+            } > "$DEBUG_FILE"
         fi
         set -x
     fi
@@ -1152,6 +1235,8 @@ main() {
     step_check_previous
     dbg "=== Step 1: Prerequisites ==="
     step_prerequisites
+    dbg "=== Step 1.5: UFW ==="
+    step_ufw
 
     # SSL certificates
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
@@ -1248,8 +1333,11 @@ main() {
         log ""
         log "IMPORTANT: Node Nginx is on port 4433 (panel+node mode)"
         log "Configure firewall to route external 443 traffic to Node:"
-        log "  iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 4433"
-        log "  iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-port 4433"
+        log "  # UFW port redirect (edit /etc/ufw/before.rules):"
+        log "  # Add to *nat section, before COMMIT:"
+        log "  #   -A prerouting_rule -p tcp --dport 443 -j REDIRECT --to-port 4433"
+        log "  #   -A prerouting_rule -p udp --dport 443 -j REDIRECT --to-port 4433"
+        log "  # Then: ufw reload"
     fi
 }
 
