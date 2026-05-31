@@ -25,7 +25,9 @@ jobs:
           SHELLCHECK_OPTS: -e SC2016 -e SC2086 -e SC2154 -e SC2034 -e SC2015 -e SC1090
 
       - name: Bash syntax check
-        run: bash -n deploy.sh
+        run: |
+          bash -n deploy.sh
+          bash -n install.sh
 
       - name: Validate docker-compose YAML
         run: |
@@ -75,6 +77,6 @@ jobs:
 
       - name: Check for real domains/IPs
         run: |
-          grep -rnE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' deploy.sh | grep -v '127\.0\.0\.1\|0\.0\.0\.0\|::\|1\.1\.1\.1\|1\.0\.0\.1\|8\.8\.\|208\.67\.\|::1' && echo "FOUND: Real IP" && exit 1 || true
-          grep -rnE '[a-zA-Z0-9.-]+\.(com|ru|net|org|io)\.[a-zA-Z0-9]*' deploy.sh | grep -v 'example\.com\|domain\.com\|acme-\|letsencrypt\|get\.acme\.sh\|get\.docker\.com\|github\.com\|githubusercontent\.com\|docs\.rw\|\.rules' && echo "FOUND: Real domain" && exit 1 || true
+          grep -rnE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' deploy.sh install.sh | grep -v '127\.0\.0\.1\|0\.0\.0\.0\|::\|1\.1\.1\.1\|1\.0\.0\.1\|8\.8\.\|208\.67\.\|::1' && echo "FOUND: Real IP" && exit 1 || true
+          grep -rnE '[a-zA-Z0-9.-]+\.(com|ru|net|org|io)\.[a-zA-Z0-9]*' deploy.sh install.sh | grep -v 'example\.com\|domain\.com\|acme-\|letsencrypt\|get\.acme\.sh\|get\.docker\.com\|github\.com\|githubusercontent\.com\|docs\.rw\|\.rules' && echo "FOUND: Real domain" && exit 1 || true
           echo "No real domains/IPs found"
