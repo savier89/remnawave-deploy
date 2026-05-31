@@ -125,6 +125,244 @@ prompt() {
 }
 
 # ============================================================
+# Detection: Check for existing Remnawave components
+# ============================================================
+# Returns via global variables:
+#   HAS_PANEL_NGINX, HAS_NODE_NGINX, HAS_PANEL_DIR, HAS_NODE_DIR
+detect_existing_setup() {
+    HAS_PANEL_NGINX=false
+    HAS_NODE_NGINX=false
+    HAS_PANEL_DIR=false
+    HAS_NODE_DIR=false
+
+    # Check nginx containers
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "remnawave-panel-nginx"; then
+        HAS_PANEL_NGINX=true
+    fi
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "remnawave-node-nginx"; then
+        HAS_NODE_NGINX=true
+    fi
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "remnawave-unified-nginx"; then
+        # Unified nginx means both Panel and Node nginx are present
+        HAS_PANEL_NGINX=true
+        HAS_NODE_NGINX=true
+    fi
+
+    # Check directories
+    [[ -d "/opt/remnawave" ]] && HAS_PANEL_DIR=true
+    [[ -d "/opt/remnanode" ]] && HAS_NODE_DIR=true
+
+    debug_vars "Existing setup" HAS_PANEL_NGINX HAS_NODE_NGINX HAS_PANEL_DIR HAS_NODE_DIR
+}
+
+# Upgrade to unified nginx when both Panel and Node nginx exist
+upgrade_to_unified_nginx() {
+    log "=== Upgrading to Unified Nginx ==="
+    warn "Detected both Panel and Node nginx — upgrading to unified container"
+
+    local pd="/opt/remnawave/nginx"
+
+    # Stop old containers
+    if $HAS_PANEL_NGINX; then
+        dbg "Stopping remnawave-panel-nginx..."
+        run "docker stop remnawave-panel-nginx 2>/dev/null || true"
+        run "docker rm remnawave-panel-nginx 2>/dev/null || true"
+    fi
+    if $HAS_NODE_NGINX; then
+        dbg "Stopping remnawave-node-nginx..."
+        run "docker stop remnawave-node-nginx 2>/dev/null || true"
+        run "docker rm remnawave-node-nginx 2>/dev/null || true"
+    fi
+
+    # Ensure Node SSL directory exists
+    run "mkdir -p /opt/remnanode/ssl"
+
+    # Generate QUIC host key if needed
+    if [[ ! -f "/opt/remnanode/ssl/quic_host.key" ]]; then
+        dbg "Generating QUIC host key..."
+        run "openssl rand -out /opt/remnanode/ssl/quic_host.key 32"
+    fi
+
+    # Create stub.html
+    cat > "$pd/stub.html" <<'EOF'
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+<title>Coming Soon</title>
+<style>body{font-family:system-ui,sans-serif;text-align:center;padding:60px 20px;background:#f5f5f5}
+h1{color:#333;font-size:24px}p{color:#666}</style></head>
+<body><h1>Coming Soon</h1><p>This page will be available soon.</p></body></html>
+EOF
+
+    # Generate unified nginx config
+    cat > "$pd/nginx.conf" <<EOF
+# Panel upstream
+upstream remnawave {
+    server remnawave:3000;
+}
+
+# Panel server block
+server {
+    server_name ${PANEL_DOMAIN};
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
+    http2 on;
+    http3 on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    ssl_protocols          TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:MozSSL:10m;
+    ssl_session_tickets    off;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    ssl_certificate "/etc/nginx/ssl/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/fullchain.pem";
+    ssl_stapling           on;
+    ssl_stapling_verify    on;
+    resolver               1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 208.67.222.222 208.67.220.220 valid=60s;
+    resolver_timeout       2s;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_min_length 256;
+    gzip_types application/atom+xml application/geo+json application/javascript application/x-javascript application/json application/ld+json application/manifest+json application/rdf+xml application/rss+xml application/xhtml+xml application/xml font/eot font/otf font/ttf image/svg+xml text/css text/javascript text/plain text/xml;
+}
+
+# Node server block - VLESS + XHTTP3 proxy
+server {
+    listen 80; listen [::]:80;
+    server_name $NODE_DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+server {
+    listen 443 ssl; listen [::]:443 ssl;
+    listen 443 quic reuseport; listen [::]:443 quic reuseport;
+    server_name $NODE_DOMAIN;
+    root /var/www/html; index index.html;
+    http2 on; http3 on;
+    ssl_early_data on;
+    quic_retry on;
+    quic_gso on;
+    quic_host_key /etc/nginx/ssl/quic_host.key;
+
+    ssl_certificate "/etc/nginx/ssl/node/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/node/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/node/fullchain.pem";
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    resolver 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 valid=60s;
+    resolver_timeout 2s;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+
+    client_header_timeout 60s; keepalive_timeout 75s;
+
+    location /api/v1 {
+        client_max_body_size 0;
+        grpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        client_body_timeout 5m; grpc_read_timeout 315; grpc_send_timeout 5m;
+        grpc_pass unix:/dev/shm/xrxh.socket;
+    }
+    location / {
+        add_header X-Robots-Tag "noindex,nofollow,noarchive,nosnippet,noimageindex" always;
+        add_header Alt-Svc 'h3=":443"; ma=86400' always;
+    }
+}
+EOF
+
+    # Add Sub server block if needed
+    if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+        cat >> "$pd/nginx.conf" <<EOF
+
+# Sub server block
+server {
+    server_name ${SUB_DOMAIN};
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    http2 on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:MozSSL:10m;
+    ssl_session_tickets off;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    ssl_certificate "/etc/nginx/ssl/sub/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/sub/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/sub/fullchain.pem";
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 valid=60s;
+    resolver_timeout 2s;
+}
+EOF
+    fi
+
+    # Default reject server block
+    cat >> "$pd/nginx.conf" <<EOF
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+EOF
+
+    # Unified docker-compose.yml
+    cat > "$pd/docker-compose.yml" <<EOF
+services:
+  remnawave-unified-nginx:
+    image: macbre/nginx-http3:latest
+    container_name: remnawave-unified-nginx
+    network_mode: host
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
+      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+      - /opt/remnanode/ssl:/etc/nginx/ssl/node:ro
+      - /dev/shm:/dev/shm:ro
+      - ./stub.html:/var/www/html/index.html:ro
+    restart: always
+EOF
+
+    # Add sub cert volume if needed
+    if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+        sed -i '/- \/opt\/remnanode\/ssl/a\      - ./sub:/etc/nginx/ssl/sub:ro' "$pd/docker-compose.yml"
+    fi
+
+    # Start unified nginx
+    run "cd $pd && docker compose up -d"
+    ok "Unified Nginx started (Panel + Node merged)"
+}
+
+# ============================================================
 # STEP 0: Interactive Configuration
 # ============================================================
 step_config() {
@@ -190,7 +428,7 @@ step_check_previous() {
 
     # Check ALL containers (running + stopped)
     local containers
-    containers=$(docker ps -a --format "{{.Names}}" 2>/dev/null | grep -E "remnawave|remnanode|panel-nginx" || true)
+    containers=$(docker ps -a --format "{{.Names}}" 2>/dev/null | grep -E "remnawave|remnanode|panel-nginx|unified-nginx" || true)
     if [[ -n "$containers" ]]; then warn "Found containers: $containers"; found=true; fi
 
     # Check volumes
@@ -421,25 +659,17 @@ step_ufw() {
 
     # Node-specific rules
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
-        # Node API port (Panel → Node communication)
-        # For node-only: always open. For panel+node: only if non-default (internal otherwise).
-        if [[ "$ROLE" == "node" ]] || [[ "$ROLE" == "panel+node" && "$NODE_PORT" != "2222" ]]; then
+        # Node API port (Panel → Node communication) - restrict to Panel IP only
+        if [[ "$ROLE" == "node" ]]; then
+            # node-only: PANEL_HOST is the Panel server IP
             if ! ufw status | grep -q "${NODE_PORT}.*ALLOW"; then
-                run "ufw allow ${NODE_PORT}/tcp"
-                ok "UFW: Node API (${NODE_PORT}/tcp) allowed"
+                run "ufw allow from ${PANEL_HOST} to any port ${NODE_PORT} proto tcp"
+                ok "UFW: Node API (${NODE_PORT}/tcp) allowed from $PANEL_HOST only"
             fi
         fi
-        # Node nginx on port 4433 (panel+node mode)
+        # panel+node: Panel is local, port 2222 is internal (localhost)
         if [[ "$ROLE" == "panel+node" ]]; then
-            if ! ufw status | grep -q "4433.*ALLOW"; then
-                run "ufw allow 4433/tcp"
-                ok "UFW: Node nginx (4433/tcp) allowed"
-            fi
-            # UDP 4433 for QUIC/HTTP3
-            if ! ufw status | grep -q "4433.*ALLOW.*udp"; then
-                run "ufw allow 4433/udp"
-                ok "UFW: Node nginx QUIC (4433/udp) allowed"
-            fi
+            dbg "Panel+node mode: Node API port 2222 is internal (localhost)"
         fi
     fi
 
@@ -489,8 +719,11 @@ step_ssl() {
 
     # Determine correct nginx container for reload
     # Panel nginx is 'remnawave-panel-nginx', Node nginx is 'remnawave-node-nginx'
+    # In panel+node mode: unified nginx is 'remnawave-unified-nginx'
     local nginx_container
-    if [[ "$domain" == "${NODE_DOMAIN:-}" ]]; then
+    if [[ "$ROLE" == "panel+node" ]]; then
+        nginx_container="remnawave-unified-nginx"
+    elif [[ "$domain" == "${NODE_DOMAIN:-}" ]]; then
         nginx_container="remnawave-node-nginx"
     else
         nginx_container="remnawave-panel-nginx"
@@ -586,23 +819,221 @@ step_panel() {
 # ============================================================
 # STEP 4: Panel Nginx (official docs template)
 # ============================================================
+# In panel+node mode: creates a UNIFIED nginx with server blocks for Panel, Node, and optionally Sub
+# In panel-only mode: creates nginx for Panel only
 step_panel_nginx() {
     local pd="/opt/remnawave/nginx"
-    log "=== Panel Nginx (official template) ==="
+    log "=== Panel Nginx ==="
 
     run "mkdir -p $pd"
 
-    # Determine port binding based on role
-    # panel+node: panel nginx binds 127.0.0.1 (node nginx takes 0.0.0.0)
-    # panel only: bind 0.0.0.0 (official default)
-    local nginx_bind="0.0.0.0"
-    if [[ "$ROLE" == "panel+node" ]]; then
-        nginx_bind="127.0.0.1"
-    fi
-    dbg "Panel nginx bind: $nginx_bind (ROLE=$ROLE)"
+    # In panel+node mode: unified nginx (single container, multiple server blocks)
+    # In panel-only mode: standard Panel nginx
+    local unified=false
+    [[ "$ROLE" == "panel+node" ]] && unified=true
 
-    # nginx.conf - EXACT template from official docs + enhancements
-    cat > "$pd/nginx.conf" <<EOF
+    # Detect existing setup for panel-only mode
+    if ! $unified; then
+        detect_existing_setup
+        # If Node nginx already exists on this server, upgrade to unified nginx
+        if $HAS_NODE_NGINX; then
+            warn "Node nginx detected on this server"
+            confirm "Upgrade to unified nginx (merges Panel + Node)?" || err "Aborted"
+            upgrade_to_unified_nginx
+            return 0
+        fi
+    fi
+
+    # Generate nginx config
+    if $unified; then
+        # UNIFIED nginx config for panel+node mode
+        cat > "$pd/nginx.conf" <<EOF
+# Panel upstream
+upstream remnawave {
+    server remnawave:3000;
+}
+
+# Panel server block
+server {
+    server_name ${PANEL_DOMAIN};
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
+    http2 on;
+    http3 on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # SSL Configuration
+    ssl_protocols          TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:MozSSL:10m;
+    ssl_session_tickets    off;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    ssl_certificate "/etc/nginx/ssl/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/fullchain.pem";
+    ssl_stapling           on;
+    ssl_stapling_verify    on;
+    resolver               1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 208.67.222.222 208.67.220.220 valid=60s;
+    resolver_timeout       2s;
+
+    # Gzip Compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_min_length 256;
+    gzip_types application/atom+xml application/geo+json application/javascript application/x-javascript application/json application/ld+json application/manifest+json application/rdf+xml application/rss+xml application/xhtml+xml application/xml font/eot font/otf font/ttf image/svg+xml text/css text/javascript text/plain text/xml;
+}
+
+# Node server block - VLESS + XHTTP3 proxy
+server {
+    listen 80; listen [::]:80;
+    server_name $NODE_DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+server {
+    listen 443 ssl; listen [::]:443 ssl;
+    listen 443 quic reuseport; listen [::]:443 quic reuseport;
+    server_name $NODE_DOMAIN;
+    root /var/www/html; index index.html;
+    http2 on; http3 on;
+    ssl_early_data on;
+    quic_retry on;
+    quic_gso on;
+    quic_host_key /etc/nginx/ssl/quic_host.key;
+
+    ssl_certificate "/etc/nginx/ssl/node/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/node/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/node/fullchain.pem";
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    resolver 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 valid=60s;
+    resolver_timeout 2s;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+
+    client_header_timeout 60s; keepalive_timeout 75s;
+
+    location /api/v1 {
+        client_max_body_size 0;
+        grpc_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        client_body_timeout 5m; grpc_read_timeout 315; grpc_send_timeout 5m;
+        grpc_pass unix:/dev/shm/xrxh.socket;
+    }
+    location / {
+        add_header X-Robots-Tag "noindex,nofollow,noarchive,nosnippet,noimageindex" always;
+        add_header Alt-Svc 'h3=":443"; ma=86400' always;
+    }
+}
+EOF
+
+        # Add Sub server block if SUB_DOMAIN differs from PANEL_DOMAIN
+        if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+            cat >> "$pd/nginx.conf" <<EOF
+
+# Sub server block
+server {
+    server_name ${SUB_DOMAIN};
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    http2 on;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:MozSSL:10m;
+    ssl_session_tickets off;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+    ssl_certificate "/etc/nginx/ssl/sub/fullchain.pem";
+    ssl_certificate_key "/etc/nginx/ssl/sub/privkey.key";
+    ssl_trusted_certificate "/etc/nginx/ssl/sub/fullchain.pem";
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 valid=60s;
+    resolver_timeout 2s;
+}
+EOF
+        fi
+
+        # Default reject server block
+        cat >> "$pd/nginx.conf" <<EOF
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+EOF
+
+        # Unified docker-compose.yml
+        cat > "$pd/docker-compose.yml" <<EOF
+services:
+  remnawave-unified-nginx:
+    image: macbre/nginx-http3:latest
+    container_name: remnawave-unified-nginx
+    network_mode: host
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
+      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+      - /opt/remnanode/ssl:/etc/nginx/ssl/node:ro
+      - /dev/shm:/dev/shm:ro
+      - ./stub.html:/var/www/html/index.html:ro
+    restart: always
+EOF
+
+        # Add sub cert volume if needed
+        if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+            sed -i '/- \/opt\/remnanode\/ssl/a\      - ./sub:/etc/nginx/ssl/sub:ro' "$pd/docker-compose.yml"
+        fi
+
+        # Create stub.html for Node
+        cat > "$pd/stub.html" <<'EOF'
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+<title>Coming Soon</title>
+<style>body{font-family:system-ui,sans-serif;text-align:center;padding:60px 20px;background:#f5f5f5}
+h1{color:#333;font-size:24px}p{color:#666}</style></head>
+<body><h1>Coming Soon</h1><p>This page will be available soon.</p></body></html>
+EOF
+
+        # Generate QUIC host key if needed
+        if [[ ! -f "/opt/remnanode/ssl/quic_host.key" ]]; then
+            dbg "Generating QUIC host key..."
+            run "mkdir -p /opt/remnanode/ssl && openssl rand -out /opt/remnanode/ssl/quic_host.key 32"
+        fi
+
+        ok "Unified Nginx configured (Panel + Node + $( [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]] && echo "Sub" || echo "0" ))"
+    else
+        # Standard Panel-only nginx
+        local nginx_bind="0.0.0.0"
+
+        cat > "$pd/nginx.conf" <<EOF
 upstream remnawave {
     server remnawave:3000;
 }
@@ -659,9 +1090,9 @@ server {
 }
 EOF
 
-    # If SUB_DOMAIN differs from PANEL_DOMAIN, add separate server block
-    if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
-        cat >> "$pd/nginx.conf" <<EOF
+        # If SUB_DOMAIN differs from PANEL_DOMAIN, add separate server block
+        if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+            cat >> "$pd/nginx.conf" <<EOF
 
 server {
     server_name ${SUB_DOMAIN};
@@ -693,10 +1124,10 @@ server {
     resolver_timeout 2s;
 }
 EOF
-    fi
+        fi
 
-    # docker-compose.yml - per official docs, adapted
-    cat > "$pd/docker-compose.yml" <<EOF
+        # docker-compose.yml - per official docs, adapted
+        cat > "$pd/docker-compose.yml" <<EOF
 services:
   remnawave-panel-nginx:
       image: macbre/nginx-http3:latest
@@ -719,19 +1150,39 @@ networks:
     external: true
 EOF
 
-    # If SUB_DOMAIN differs, mount sub certs too
-    if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
-        # Add sub cert volume mount
-        sed -i '/- .\/dhparam.pem/a\      - ./sub:/etc/nginx/ssl/sub:ro' "$pd/docker-compose.yml"
-    fi
+        # If SUB_DOMAIN differs, mount sub certs too
+        if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
+            # Add sub cert volume mount
+            sed -i '/- .\/dhparam.pem/a\      - ./sub:/etc/nginx/ssl/sub:ro' "$pd/docker-compose.yml"
+        fi
 
-    ok "Panel Nginx configured in $pd"
+        ok "Panel Nginx configured in $pd"
+    fi
 }
 
 # ============================================================
 # STEP 5: Node Nginx (VLESS + XHTTP3 reverse proxy)
 # ============================================================
+# In panel+node mode: SKIPPED (unified nginx handles Node traffic)
+# In node-only mode: creates nginx for Node only (or upgrades if Panel nginx exists)
 step_node_nginx() {
+    # In panel+node mode, unified nginx already handles Node traffic
+    if [[ "$ROLE" == "panel+node" ]]; then
+        ok "Node Nginx skipped (handled by unified nginx)"
+        return 0
+    fi
+
+    # Detect existing setup
+    detect_existing_setup
+
+    # If Panel nginx already exists on this server, upgrade to unified nginx
+    if $HAS_PANEL_NGINX; then
+        warn "Panel nginx detected on this server"
+        confirm "Upgrade to unified nginx (merges Panel + Node)?" || err "Aborted"
+        upgrade_to_unified_nginx
+        return 0
+    fi
+
     local nginx_dir="/opt/remnanode/nginx"
     log "=== Node Nginx (VLESS + XHTTP3) ==="
 
@@ -799,31 +1250,8 @@ server {
 }
 EOF
 
-    # docker-compose.yml for Node nginx
-    # panel+node role: use bridge mode on port 4433 to avoid conflict with panel nginx
-    # node only role: use host mode (direct port 443)
-    if [[ "$ROLE" == "panel+node" ]]; then
-        dbg "Node nginx: bridge mode on port 4433 (panel+node)"
-        cat > "$nginx_dir/docker-compose.yml" <<EOF
-services:
-  remnawave-node-nginx:
-      image: macbre/nginx-http3:latest
-      container_name: remnawave-node-nginx
-      volumes:
-        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-        - ./stub.html:/var/www/html/index.html:ro
-        - /opt/remnanode/ssl:/etc/nginx/ssl:ro
-        - /dev/shm:/dev/shm:ro
-      ports:
-        - "4433:443/tcp"
-        - "4433:443/udp"
-      restart: always
-EOF
-        warn "Node Nginx binds to port 4433 (panel+node mode)"
-        warn "Configure firewall: redirect external 443 -> 4433, or use SNAT"
-    else
-        dbg "Node nginx: host mode (node-only)"
-        cat > "$nginx_dir/docker-compose.yml" <<EOF
+    # docker-compose.yml for Node nginx (node-only: host mode)
+    cat > "$nginx_dir/docker-compose.yml" <<EOF
 services:
   remnawave-node-nginx:
       image: macbre/nginx-http3:latest
@@ -836,7 +1264,6 @@ services:
         - /dev/shm:/dev/shm:ro
       restart: always
 EOF
-    fi
 
     ok "Node Nginx configured in $nginx_dir"
 }
@@ -980,22 +1407,34 @@ step_start() {
     # Panel nginx (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/nginx/docker-compose.yml" ]]; then
-            dbg "Panel nginx docker-compose.yml exists, checking if running..."
-            if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
-                warn "remnawave-panel-nginx already running, skipping"
+            if [[ "$ROLE" == "panel+node" ]]; then
+                # Unified nginx in panel+node mode
+                local nginx_name="remnawave-unified-nginx"
+                if docker ps --format "{{.Names}}" | grep -q "$nginx_name"; then
+                    warn "$nginx_name already running, skipping"
+                else
+                    dbg "Starting unified nginx..."
+                    run "cd /opt/remnawave/nginx && docker compose up -d"
+                    ok "Unified Nginx started"
+                    dbg "Unified nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-unified-nginx || echo 'none')"
+                fi
             else
-                dbg "Starting Panel nginx..."
-                run "cd /opt/remnawave/nginx && docker compose up -d"
-                ok "Panel Nginx started"
-                dbg "Panel nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-panel-nginx || echo 'none')"
+                # Panel-only nginx
+                if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
+                    warn "remnawave-panel-nginx already running, skipping"
+                else
+                    dbg "Starting Panel nginx..."
+                    run "cd /opt/remnawave/nginx && docker compose up -d"
+                    ok "Panel Nginx started"
+                    dbg "Panel nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-panel-nginx || echo 'none')"
+                fi
             fi
         fi
     fi
 
-    # Node nginx (node and panel+node roles)
-    if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
+    # Node nginx (node-only role only — panel+node uses unified nginx)
+    if [[ "$ROLE" == "node" ]]; then
         if [[ -f "/opt/remnanode/nginx/docker-compose.yml" ]]; then
-            dbg "Node nginx docker-compose.yml exists, checking if running..."
             if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
                 warn "remnawave-node-nginx already running, skipping"
             else
@@ -1033,7 +1472,14 @@ step_verify() {
 
     # Check Panel nginx
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
-        if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
+        local nginx_container
+        if [[ "$ROLE" == "panel+node" ]]; then
+            nginx_container="remnawave-unified-nginx"
+        else
+            nginx_container="remnawave-panel-nginx"
+        fi
+
+        if docker ps --format "{{.Names}}" | grep -q "$nginx_container"; then
             local code
             dbg "Checking Panel nginx: curl https://$PANEL_DOMAIN --resolve $PANEL_DOMAIN:443:127.0.0.1 --insecure"
             code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
@@ -1055,15 +1501,17 @@ step_verify() {
 
     # Check Node nginx
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
-        if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
+        local nginx_container
+        if [[ "$ROLE" == "panel+node" ]]; then
+            nginx_container="remnawave-unified-nginx"
+        else
+            nginx_container="remnawave-node-nginx"
+        fi
+
+        if docker ps --format "{{.Names}}" | grep -q "$nginx_container"; then
             local code
-            if [[ "$ROLE" == "panel+node" ]]; then
-                dbg "Checking Node nginx (panel+node): curl https://$NODE_DOMAIN --resolve $NODE_DOMAIN:4433:127.0.0.1 --insecure"
-                code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:4433:127.0.0.1" --insecure 2>/dev/null || echo "000")
-            else
-                dbg "Checking Node nginx (node-only): curl https://$NODE_DOMAIN --insecure"
-                code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --insecure 2>/dev/null || echo "000")
-            fi
+            dbg "Checking Node nginx: curl https://$NODE_DOMAIN --resolve $NODE_DOMAIN:443:127.0.0.1 --insecure"
+            code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
             dbg "Node nginx response code: $code"
             [[ "$code" == "200" || "$code" == "301" ]] && ok "Node Nginx OK ($code)" || warn "Node Nginx ($code)"
         fi
@@ -1358,14 +1806,6 @@ main() {
         log "3. Panel: Click 'Copy docker-compose.yml' → update /opt/remnanode/docker-compose.yml"
         log "4. Panel: Link Config Profile to Node → Enable Node"
         log "5. Restart Node: cd /opt/remnanode && docker compose up -d"
-        log ""
-        log "IMPORTANT: Node Nginx is on port 4433 (panel+node mode)"
-        log "Configure firewall to route external 443 traffic to Node:"
-        log "  # UFW port redirect (edit /etc/ufw/before.rules):"
-        log "  # Add to *nat section, before COMMIT:"
-        log "  #   -A prerouting_rule -p tcp --dport 443 -j REDIRECT --to-port 4433"
-        log "  #   -A prerouting_rule -p udp --dport 443 -j REDIRECT --to-port 4433"
-        log "  # Then: ufw reload"
     fi
 }
 
