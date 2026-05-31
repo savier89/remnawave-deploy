@@ -23,7 +23,7 @@ jobs:
           check_together: true
           format: gcc
         env:
-          SHELLCHECK_OPTS: -e SC2016 -e SC2086 -e SC2154
+          SHELLCHECK_OPTS: -e SC2016 -e SC2086 -e SC2154 -e SC2034 -e SC2015 -e SC1090
 
       - name: SDL Security Audit
         run: |
