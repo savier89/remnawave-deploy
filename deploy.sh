@@ -68,7 +68,7 @@ done
 [[ -z "$ROLE" ]] && usage
 
 run() {
-    if $DRY_RUN; then log "DRY: $*"; else log "$*"; bash -c "$*"; fi
+    if $DRY_RUN; then log "DRY: $*"; else log "$*"; "$@"; fi
 }
 confirm() {
     $FORCE && return 0
@@ -258,7 +258,7 @@ step_check_previous() {
 
     # 9. Docker system prune (dangling)
     log "Pruning dangling Docker data..."
-    run "docker system prune -f --filter 'label=remnawave' 2>/dev/null || docker system prune -f --filter 'until=24h'"
+    run "docker system prune -f"
 
     ok "Full cleanup complete"
 }
@@ -352,12 +352,8 @@ step_ssl() {
         --server '$acme_server'"
 
     # Determine correct nginx container for reload
-    local nginx_container
-    if [[ "$domain" == "${NODE_DOMAIN:-}" ]] && [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
-        nginx_container="remnawave-nginx"
-    else
-        nginx_container="remnawave-nginx"
-    fi
+    # Panel nginx is always 'remnawave-nginx' (official name)
+    local nginx_container="remnawave-nginx"
 
     # Install cert with auto-renew hook
     run "acme.sh --install-cert -d '$domain' \
@@ -402,15 +398,14 @@ step_panel() {
     fi
 
     # Change Postgres password (exact from docs)
-    # Official: pw=$(openssl rand -hex 24) && sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env \
-    #   && sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:\)[^\@]*\(@.*\)|\1$pw\2|" .env
-    if ! $DRY_RUN; then
-       sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pg/" "$pd/.env"
-       sed -i "s|^
-\(DATABASE_URL=\"postgresql://postgres:\)[^\@]*\(@.*\)|\1${pg}\2|" "$pd/.env"
-    else
-        log "DRY: sed POSTGRES_PASSWORD and DATABASE_URL"
-    fi
+      # Official: pw=$(openssl rand -hex 24) && sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env \
+      #   && sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1$pw\2|" .env
+      if ! $DRY_RUN; then
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pg/" "$pd/.env"
+          sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1${pg}\2|" "$pd/.env"
+      else
+          log "DRY: sed POSTGRES_PASSWORD and DATABASE_URL"
+      fi
 
     # Set domains (per official docs)
     if ! $DRY_RUN; then
@@ -419,8 +414,7 @@ step_panel() {
 
         # PANEL_DOMAIN is optional - set it if it exists in .env.sample
         if grep -q "^PANEL_DOMAIN=" "$pd/.env"; then
-           sed -i "s|^
-PANEL_DOMAIN=.*|PANEL_DOMAIN=${PANEL_DOMAIN}|" "$pd/.env"
+            sed -i "s|^PANEL_DOMAIN=.*|PANEL_DOMAIN=${PANEL_DOMAIN}|" "$pd/.env"
         fi
     else
         log "DRY: sed FRONT_END_DOMAIN, SUB_PUBLIC_DOMAIN, PANEL_DOMAIN"
@@ -884,7 +878,7 @@ step_verify() {
         if docker ps --format "{{.Names}}" | grep -q remnawave-nginx; then
             local code
             if [[ "$ROLE" == "panel+node" ]]; then
-                code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:443:127.0.0.1:4433" --insecure 2>/dev/null || echo "000")
+                code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:4433:127.0.0.1" --insecure 2>/dev/null || echo "000")
             else
                 code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --insecure 2>/dev/null || echo "000")
             fi
