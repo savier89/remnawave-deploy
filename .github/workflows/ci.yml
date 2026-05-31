@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  lint:
+    name: Shellcheck + SDL Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          check_together: true
+          format: gcc
+        env:
+          SHELLCHECK_OPTS: -e SC2016 -e SC2086 -e SC2154
+
+      - name: SDL Security Audit
+        run: |
+          chmod +x scripts/sdl-audit.sh
+          bash scripts/sdl-audit.sh deploy.sh
+        continue-on-error: false
+
+      - name: Bash syntax check
+        run: bash -n deploy.sh
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Check for real secrets (not variable names or placeholders)
+          grep -rn 'sk-[a-zA-Z0-9]\{20,\}' . && echo "FOUND: OpenAI key" && exit 1 || true
+          grep -rn 'AKIA[0-9A-Z]\{16,\}' . && echo "FOUND: AWS key" && exit 1 || true
+          grep -rn 'ghp_[a-zA-Z0-9]\{36,\}' . && echo "FOUND: GitHub PAT" && exit 1 || true
+          grep -rn 'xox[baprs]-[a-zA-Z0-9-]\{10,\}' . && echo "FOUND: Slack token" && exit 1 || true
+          echo "No hardcoded secrets found"
+
+      - name: Check for real domains/IPs
+        run: |
+          # Allow only placeholder domains
+          grep -rnE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' deploy.sh | grep -v '127\.0\.0\.1\|0\.0\.0\.0\|::\|1\.1\.1\.1\|1\.0\.0\.1\|8\.8\.\|208\.67\.\|::1' && echo "FOUND: Real IP" && exit 1 || true
+          grep -rnE '[a-zA-Z0-9.-]+\.(com|ru|net|org|io)\.?[a-zA-Z0-9]*' deploy.sh | grep -v 'example\.com\|domain\.com\|acme-\|letsencrypt\|get\.acme\.sh\|get\.docker\.com\|github\.com\|docs\.rw' && echo "FOUND: Real domain" && exit 1 || true
+          echo "No real domains/IPs found"
