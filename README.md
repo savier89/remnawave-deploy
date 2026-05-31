@@ -1,11 +1,19 @@
 # Remnawave Deploy
 
+> **⚠️ WARNING: This script is NOT production-ready!**  
+> This is an early development version. Use at your own risk.  
+> Features may change, bugs may exist, and data loss is possible.
+
 Universal deployment script for Remnawave Panel and Node based on [official documentation](https://docs.rw/docs/install/).
 
 ## Quick Start
 
 ```bash
-./deploy.sh <ROLE> [OPTIONS]
+# Install remnawave_manager
+bash <(curl -Ls https://raw.githubusercontent.com/savier89/remnawave-deploy/refs/heads/main/install.sh)
+
+# Deploy
+remnawave_manager install <ROLE> [OPTIONS]
 ```
 
 ### Roles
@@ -14,7 +22,7 @@ Universal deployment script for Remnawave Panel and Node based on [official docu
 |---|---|
 | `panel` | Panel + Nginx reverse proxy only |
 | `node` | Node + Nginx reverse proxy only |
-| `panel+node` | Panel + Node + both Nginx containers |
+| `panel+node` | Panel + Node + unified Nginx |
 
 ### Options
 
@@ -34,31 +42,31 @@ Universal deployment script for Remnawave Panel and Node based on [official docu
 ┌─────────────────────────────────────────────────────┐
 │                    External                          │
 │                                                      │
-│  Panel Domain ──→ 443/tcp ──→ remnawave-panel-nginx │
-│  Node Domain  ──→ 443/tcp ──→ remnawave-node-nginx  │
-│                        (port 4433 in panel+node)     │
+│  Panel Domain ──→ 443/tcp ──→ remnawave-unified-nginx │
+│  Node Domain  ──→ 443/tcp ──→ remnawave-unified-nginx │
+│  Sub Domain   ──→ 443/tcp ──→ remnawave-unified-nginx │
 └─────────────────────────────────────────────────────┘
 
 Panel+Node mode:
-  Panel nginx: 127.0.0.1:443 (internal only)
-  Node nginx:  0.0.0.0:4433 (external traffic)
+  Unified nginx: 0.0.0.0:443 (single container, multiple server blocks)
+  - Panel domain → port 3000 (web interface)
+  - Node domain → /dev/shm/xrxh.socket (Xray for user traffic)
+  - Sub domain → port 3000 (if different from Panel domain)
 ```
 
 ### Container Naming
 
 | Container | Official Name | Our Name | Reason |
 |---|---|---|---|
-| Panel Nginx | `remnawave-nginx` | `remnawave-panel-nginx` | Avoid conflict in `panel+node` mode |
-| Node Nginx | — | `remnawave-node-nginx` | Separate container for Node QUIC proxy |
+| Unified Nginx | — | `remnawave-unified-nginx` | Single container with multiple server blocks |
 
-**Why different names?** The official docs assume a single-role deployment (panel OR node). Our script supports `panel+node` mode where both nginx containers run on the same host, requiring unique names to avoid Docker conflicts.
+**Why unified nginx?** In `panel+node` mode, both Panel and Node need port 443. Instead of using port 4433, we use a single nginx container with multiple server blocks that dynamically route traffic based on the domain.
 
 ### Nginx Image Choice
 
 | Image | Features | Used For |
 |---|---|---|
-| `nginx:1.28` (official) | HTTP/2 only | Panel reverse proxy |
-| `macbre/nginx-http3:latest` (ours) | HTTP/2 + HTTP/3 (QUIC) | Node reverse proxy |
+| `macbre/nginx-http3:latest` | HTTP/2 + HTTP/3 (QUIC) | Unified reverse proxy |
 
 **Why `macbre/nginx-http3`?** The Node component uses VLESS + XHTTP3 protocol which requires QUIC/HTTP3 support. The official `nginx:1.28` image does not include QUIC modules. The `macbre/nginx-http3` image is built with `ngx_http_quic_module` enabled, providing native HTTP/3 support required for optimal Node performance.
 
@@ -66,8 +74,7 @@ Panel+Node mode:
 
 | Service | Port | Protocol | Mode |
 |---|---|---|---|
-| Panel Nginx | 443 | TCP/UDP | `127.0.0.1` in panel+node, `0.0.0.0` otherwise |
-| Node Nginx | 443 | TCP/UDP | `host` mode (node-only) or `4433` (panel+node) |
+| Unified Nginx | 443 | TCP/UDP | `host` mode |
 | Panel API | 3000 | TCP | Internal (behind nginx) |
 | Node API | 2222 | TCP | Panel → Node communication |
 
@@ -86,6 +93,21 @@ Panel+Node mode:
 11. **Verify** — Health checks via curl
 12. **Admin** — Create admin user via API (POST /api/auth/register)
 13. **Logrotate** — Configure log rotation for Node
+
+## Incremental Installation
+
+You can install Panel and Node separately on the same server:
+
+```bash
+# First: Install Panel only
+remnawave_manager install panel
+
+# Later: Install Node on the same server
+remnawave_manager install node
+# Script will detect Panel nginx and offer to upgrade to unified nginx
+```
+
+The script automatically detects existing components and offers to merge them into a unified nginx container.
 
 ## Troubleshooting
 
@@ -118,28 +140,14 @@ ls -la /opt/remnawave/nginx/fullchain.pem
 ls -la /opt/remnawave/nginx/privkey.key
 ```
 
-### Node Nginx port conflict (panel+node mode)
-
-In `panel+node` mode, Node Nginx binds to port **4433** to avoid conflict with Panel Nginx on port 443. Configure firewall to route external traffic:
-
-```bash
-# Edit /etc/ufw/before.rules
-# Add to *nat section, before COMMIT:
--A prerouting_rule -p tcp --dport 443 -j REDIRECT --to-port 4433
--A prerouting_rule -p udp --dport 443 -j REDIRECT --to-port 4433
-
-# Reload UFW
-ufw reload
-```
-
 ### Debug mode
 
 ```bash
 # Enable verbose output
-./deploy.sh panel+node --debug
+remnawave_manager install panel+node --debug
 
 # Save debug log to file
-./deploy.sh panel+node --debug-file /home/user/deploy-debug.log
+remnawave_manager install panel+node --debug-file /home/user/deploy-debug.log
 ```
 
 ## Requirements

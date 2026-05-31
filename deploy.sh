@@ -416,7 +416,7 @@ step_config() {
 # STEP -1: Full cleanup of all Remnawave remnants
 # ============================================================
 step_check_previous() {
-    log "=== Full cleanup ==="
+    log "=== Check previous installation ==="
 
     local found=false
     local panel_dir="/opt/remnawave"
@@ -471,6 +471,45 @@ step_check_previous() {
 
     dbg "Previous install found: dirs=$found, containers=$containers, volumes=$volumes, networks=$networks, images=$images"
     echo ""
+    
+    # Check if this is an incremental installation (Panel + Node on same server)
+    local has_panel=false
+    local has_node=false
+    
+    # Check for existing Panel installation
+    if [[ -d "$panel_dir" ]] || docker ps -a --format "{{.Names}}" 2>/dev/null | grep -q "remnawave"; then
+        has_panel=true
+    fi
+    
+    # Check for existing Node installation
+    if [[ -d "$node_dir" ]] || docker ps -a --format "{{.Names}}" 2>/dev/null | grep -q "remnanode"; then
+        has_node=true
+    fi
+    
+    # If installing Panel and Node already exists, or vice versa, offer upgrade
+    if [[ "$ROLE" == "panel" && "$has_node" == "true" ]]; then
+        warn "Node installation detected on this server"
+        confirm "Upgrade to unified nginx (merges Panel + Node)?" || err "Aborted"
+        # Don't cleanup - we'll upgrade in step_panel_nginx
+        return 0
+    fi
+    
+    if [[ "$ROLE" == "node" && "$has_panel" == "true" ]]; then
+        warn "Panel installation detected on this server"
+        confirm "Upgrade to unified nginx (merges Panel + Node)?" || err "Aborted"
+        # Don't cleanup - we'll upgrade in step_node_nginx
+        return 0
+    fi
+    
+    # If installing panel+node and both exist, offer upgrade
+    if [[ "$ROLE" == "panel+node" && "$has_panel" == "true" && "$has_node" == "true" ]]; then
+        warn "Both Panel and Node installations detected"
+        confirm "Upgrade to unified nginx?" || err "Aborted"
+        # Don't cleanup - we'll upgrade in step_panel_nginx
+        return 0
+    fi
+    
+    # Full cleanup for fresh installation
     warn "Previous installation detected — full cleanup"
     confirm "Remove ALL Remnawave/Remnanode data?" || err "Aborted"
 
