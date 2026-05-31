@@ -432,7 +432,7 @@ step_ufw() {
                 ok "UFW: Node nginx (4433/tcp) allowed"
             fi
             # UDP 4433 for QUIC/HTTP3
-            if ! ufw status | grep -q "4433.*ALLOW" | grep -q udp; then
+            if ! ufw status | grep -q "4433.*ALLOW.*udp"; then
                 run "ufw allow 4433/udp"
                 ok "UFW: Node nginx QUIC (4433/udp) allowed"
             fi
