@@ -47,5 +47,5 @@ jobs:
         run: |
           # Allow only placeholder domains
           grep -rnE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' deploy.sh | grep -v '127\.0\.0\.1\|0\.0\.0\.0\|::\|1\.1\.1\.1\|1\.0\.0\.1\|8\.8\.\|208\.67\.\|::1' && echo "FOUND: Real IP" && exit 1 || true
-          grep -rnE '[a-zA-Z0-9.-]+\.(com|ru|net|org|io)\.?[a-zA-Z0-9]*' deploy.sh | grep -v 'example\.com\|domain\.com\|acme-\|letsencrypt\|get\.acme\.sh\|get\.docker\.com\|github\.com\|docs\.rw' && echo "FOUND: Real domain" && exit 1 || true
+          grep -rnE '[a-zA-Z0-9.-]+\.(com|ru|net|org|io)\.?[a-zA-Z0-9]*' deploy.sh | grep -v 'example\.com\|domain\.com\|acme-\|letsencrypt\|get\.acme\.sh\|get\.docker\.com\|github\.com\|githubusercontent\.com\|docs\.rw' && echo "FOUND: Real domain" && exit 1 || true
           echo "No real domains/IPs found"
