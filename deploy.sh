@@ -1725,11 +1725,11 @@ CREDS
                 read -r -p "Are you sure? [y/N]: " confirm_reset
                 if [[ "$confirm_reset" =~ ^[Yy]$ ]]; then
                     log "Resetting superadmin via Rescue CLI..."
-                    docker exec -it remnawave cli <<'EOF'
+                    if docker exec -it remnawave cli <<'EOF'
 reset superadmin
 exit
 EOF
-                    if [[ $? -eq 0 ]]; then
+                    then
                         ok "Superadmin reset successful"
                         echo ""
                         echo " 1. Open: https://$PANEL_DOMAIN"
