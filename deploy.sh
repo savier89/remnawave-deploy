@@ -1725,11 +1725,36 @@ CREDS
                 read -r -p "Are you sure? [y/N]: " confirm_reset
                 if [[ "$confirm_reset" =~ ^[Yy]$ ]]; then
                     log "Resetting superadmin via Rescue CLI..."
-                    if docker exec -it remnawave cli <<'EOF'
-reset superadmin
-exit
-EOF
-                    then
+
+                    # Check if expect is installed
+                    if ! command -v expect &>/dev/null; then
+                        warn "expect not found, installing..."
+                        apt-get install -y expect >/dev/null 2>&1
+                    fi
+
+                    # Use expect to automate the interactive Rescue CLI
+                    expect <<'EXPECT_SCRIPT'
+spawn docker exec -it remnawave cli
+expect {
+    "Reset superadmin" { send "1\r"; exp_continue }
+    "Enable password" { send "1\r"; exp_continue }
+    "Reset certs" { send "1\r"; exp_continue }
+    "Get SECRET_KEY" { send "1\r"; exp_continue }
+    "Fix Collation" { send "1\r"; exp_continue }
+    "Clean up HWID" { send "1\r"; exp_continue }
+    "Clean up SRH" { send "1\r"; exp_continue }
+    "Exit" { send "1\r"; exp_continue }
+    timeout { exit 1 }
+}
+expect {
+    "Reset superadmin" { send "1\r"; exp_continue }
+    "Exit" { send "1\r"; exp_continue }
+    timeout { exit 1 }
+}
+expect eof
+EXPECT_SCRIPT
+
+                    if [[ $? -eq 0 ]]; then
                         ok "Superadmin reset successful"
                         echo ""
                         echo " 1. Open: https://$PANEL_DOMAIN"
