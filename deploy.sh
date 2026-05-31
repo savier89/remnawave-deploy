@@ -352,8 +352,13 @@ step_ssl() {
         --server '$acme_server'"
 
     # Determine correct nginx container for reload
-    # Panel nginx is always 'remnawave-nginx' (official name)
-    local nginx_container="remnawave-nginx"
+    # Panel nginx is 'remnawave-panel-nginx', Node nginx is 'remnawave-node-nginx'
+    local nginx_container
+    if [[ "$domain" == "${NODE_DOMAIN:-}" ]]; then
+        nginx_container="remnawave-node-nginx"
+    else
+        nginx_container="remnawave-panel-nginx"
+    fi
 
     # Install cert with auto-renew hook
     run "acme.sh --install-cert -d '$domain' \
@@ -546,10 +551,10 @@ EOF
     # docker-compose.yml - per official docs, adapted
     cat > "$pd/docker-compose.yml" <<EOF
 services:
-  remnawave-nginx:
-    image: macbre/nginx-http3:latest
-    container_name: remnawave-nginx
-    hostname: remnawave-nginx
+  remnawave-panel-nginx:
+     image: macbre/nginx-http3:latest
+     container_name: remnawave-panel-nginx
+     hostname: remnawave-panel-nginx
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
@@ -650,10 +655,10 @@ EOF
     if [[ "$ROLE" == "panel+node" ]]; then
         cat > "$nginx_dir/docker-compose.yml" <<EOF
 services:
-  remnawave-nginx:
-    image: macbre/nginx-http3:latest
-    container_name: remnawave-nginx
-    volumes:
+  remnawave-node-nginx:
+      image: macbre/nginx-http3:latest
+      container_name: remnawave-node-nginx
+      volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./stub.html:/var/www/html/index.html:ro
       - /opt/remnanode/ssl:/etc/nginx/ssl:ro
@@ -669,10 +674,10 @@ EOF
     else
         cat > "$nginx_dir/docker-compose.yml" <<EOF
 services:
-  remnawave-nginx:
-    image: macbre/nginx-http3:latest
-    container_name: remnawave-nginx
-    network_mode: host
+  remnawave-node-nginx:
+      image: macbre/nginx-http3:latest
+      container_name: remnawave-node-nginx
+      network_mode: host
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./stub.html:/var/www/html/index.html:ro
@@ -814,8 +819,8 @@ step_start() {
     # Panel nginx (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/nginx/docker-compose.yml" ]]; then
-            if docker ps --format "{{.Names}}" | grep -q remnawave-nginx; then
-                warn "remnawave-nginx already running, skipping"
+            if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
+                warn "remnawave-panel-nginx already running, skipping"
             else
                 run "cd /opt/remnawave/nginx && docker compose up -d"
                 ok "Panel Nginx started"
@@ -826,8 +831,8 @@ step_start() {
     # Node nginx (node and panel+node roles)
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnanode/nginx/docker-compose.yml" ]]; then
-            if docker ps --format "{{.Names}}" | grep -q remnawave-nginx; then
-                warn "remnawave-nginx already running, skipping"
+            if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
+                warn "remnawave-node-nginx already running, skipping"
             else
                 run "cd /opt/remnanode/nginx && docker compose up -d"
                 ok "Node Nginx started"
@@ -857,7 +862,7 @@ step_verify() {
 
     # Check Panel nginx
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
-        if docker ps --format "{{.Names}}" | grep -q remnawave-nginx; then
+        if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
             local code
             code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
             [[ "$code" == "200" || "$code" == "301" || "$code" == "302" ]] && ok "Panel Nginx OK ($code)" || warn "Panel Nginx ($code)"
@@ -875,7 +880,7 @@ step_verify() {
 
     # Check Node nginx
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
-        if docker ps --format "{{.Names}}" | grep -q remnawave-nginx; then
+        if docker ps --format "{{.Names}}" | grep -q remnawave-node-nginx; then
             local code
             if [[ "$ROLE" == "panel+node" ]]; then
                 code=$(curl -s -o /dev/null -w "%{http_code}" "https://$NODE_DOMAIN" --resolve "$NODE_DOMAIN:4433:127.0.0.1" --insecure 2>/dev/null || echo "000")
