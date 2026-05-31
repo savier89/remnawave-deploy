@@ -27,6 +27,35 @@ jobs:
       - name: Bash syntax check
         run: bash -n deploy.sh
 
+      - name: Validate docker-compose YAML
+        run: |
+          # Extract docker-compose blocks from deploy.sh and validate
+          python3 -c "
+          import yaml
+          import re
+          import sys
+
+          with open('deploy.sh') as f:
+              content = f.read()
+
+          # Find heredoc blocks for docker-compose
+          blocks = re.findall(r'cat > [^\"\\n]+docker-compose\\.yml <<EOF\\n(.*?)EOF', content, re.DOTALL)
+          if not blocks:
+              print('No docker-compose blocks found (expected in heredoc)')
+              sys.exit(0)
+
+          for i, block in enumerate(blocks):
+              try:
+                  parsed = yaml.safe_load(block)
+                  if not parsed:
+                      print(f'Block {i}: EMPTY')
+                      sys.exit(1)
+                  print(f'Block {i}: VALID - {list(parsed.keys())}')
+              except Exception as e:
+                  print(f'Block {i}: INVALID - {e}')
+                  sys.exit(1)
+          "
+
       - name: Check for hardcoded secrets
         run: |
           grep -rn 'sk-[a-zA-Z0-9]\{20,\}' . && echo "FOUND: OpenAI key" && exit 1 || true
