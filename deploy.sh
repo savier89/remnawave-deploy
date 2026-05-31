@@ -1615,21 +1615,9 @@ step_create_admin() {
         err "Admin credentials are required"
     fi
 
-    # Validate password complexity
-    if [[ ${#admin_pass} -lt 8 ]]; then
-        err "Password must be at least 8 characters long"
-    fi
-
-    if ! echo "$admin_pass" | grep -qE '[0-9]'; then
-        err "Password must contain at least one number"
-    fi
-
-    if ! echo "$admin_pass" | grep -qE '[A-Z]'; then
-        err "Password must contain at least one uppercase letter"
-    fi
-
-    if ! echo "$admin_pass" | grep -qE '[a-z]'; then
-        err "Password must contain at least one lowercase letter"
+    # Validate password complexity (Remnawave requires min 24 chars)
+    if [[ ${#admin_pass} -lt 24 ]]; then
+        err "Password must be at least 24 characters long (Remnawave requirement)"
     fi
 
     if [[ "$admin_pass" != "$admin_pass_confirm" ]]; then
@@ -1725,10 +1713,7 @@ CREDS
         echo " Try again with a stronger password."
         echo ""
         echo " Minimum requirements:"
-        echo " - At least 8 characters"
-        echo " - At least one number"
-        echo " - At least one uppercase letter"
-        echo " - At least one lowercase letter"
+        echo " - At least 24 characters (Remnawave requirement)"
         echo ""
         err "Admin creation failed"
     else
