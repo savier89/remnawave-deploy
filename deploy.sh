@@ -1654,10 +1654,36 @@ step_create_admin() {
         else
             ok "Admin user '$admin_user' created (token parse skipped)"
         fi
+
+        # Save credentials to a secure file
+        local creds_file="/opt/remnawave/.admin-credentials"
+        run "mkdir -p /opt/remnawave"
+        cat > "$creds_file" <<CREDS
+# Remnawave Admin Credentials
+# Generated: $(date)
+# This file contains your initial admin credentials.
+# Keep this file secure and delete it after you've logged in.
+
+ADMIN_USER=$admin_user
+ADMIN_PASS=$admin_pass
+PANEL_URL=https://$PANEL_DOMAIN
+CREDS
+        chmod 600 "$creds_file"
+
         echo ""
-        log "Login: https://$PANEL_DOMAIN"
-        log "Username: $admin_user"
-        log "Password: $admin_pass"
+        echo "=========================================="
+        echo "  Admin Account Created"
+        echo "=========================================="
+        echo ""
+        echo " Panel URL:   https://$PANEL_DOMAIN"
+        echo " Username:    $admin_user"
+        echo " Password:    $admin_pass"
+        echo ""
+        echo " Credentials saved to: $creds_file"
+        echo " (chmod 600 - only root can read)"
+        echo ""
+        echo " IMPORTANT: Delete this file after first login!"
+        echo "=========================================="
     elif [[ "$http_code" == "403" ]]; then
         warn "Registration is disabled (403 Forbidden)"
         echo ""
