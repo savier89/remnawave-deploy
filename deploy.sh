@@ -113,7 +113,7 @@ done
 
 run() {
     dbg "EXEC: $*"
-    if $DRY_RUN; then log "DRY: $*"; else log "$*"; "$@"; fi
+    if $DRY_RUN; then log "DRY: $*"; else log "$*"; eval "$*"; fi
 }
 confirm() {
     $FORCE && return 0
