@@ -652,6 +652,8 @@ step_prerequisites() {
     if ! command -v acme.sh &>/dev/null; then
         DEBIAN_FRONTEND=noninteractive run "apt-get install -y -qq cron socat"
         run "curl https://get.acme.sh | sh -s email='$EMAIL'"
+        # Add acme.sh to PATH for current session
+        export PATH="$HOME/.acme.sh:$PATH"
         source ~/.bashrc 2>/dev/null || true
 
         # Verify acme.sh cron job exists
