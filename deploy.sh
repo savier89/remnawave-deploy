@@ -648,16 +648,16 @@ step_prerequisites() {
         dbg "UFW status: $(ufw status verbose 2>/dev/null | head -1 || echo 'unknown')"
     fi
 
-    # Install acme.sh per official docs
+    # Install acme.sh per official docs (as root)
     if ! command -v acme.sh &>/dev/null; then
         DEBIAN_FRONTEND=noninteractive run "apt-get install -y -qq cron socat"
-        run "curl https://get.acme.sh | sh -s email='$EMAIL'"
+        run "curl https://get.acme.sh | sudo -E sh -s email='$EMAIL'"
         source ~/.bashrc 2>/dev/null || true
 
         # Verify acme.sh cron job exists
         if ! crontab -l 2>/dev/null | grep -q acme.sh; then
             warn "acme.sh cron job not found — attempting to install"
-            acme.sh --install-cronjob 2>&1 || warn "Could not install cron job; auto-renewal will not work"
+            sudo -E acme.sh --install-cronjob 2>&1 || warn "Could not install cron job; auto-renewal will not work"
         fi
     fi
 
