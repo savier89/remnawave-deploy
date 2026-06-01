@@ -657,7 +657,7 @@ step_prerequisites() {
         # Verify acme.sh cron job exists
         if ! crontab -l 2>/dev/null | grep -q acme.sh; then
             warn "acme.sh cron job not found — attempting to install"
-            acme.sh --install-cronjob 2>&1 || warn "Could not install cron job; auto-renewal will not work"
+            /root/.acme.sh/acme.sh --install-cronjob 2>&1 || warn "Could not install cron job; auto-renewal will not work"
         fi
     fi
 
@@ -775,8 +775,8 @@ step_ssl() {
     local acme_server="https://acme-v02.api.letsencrypt.org/directory"
     $STAGING && acme_server="https://acme-staging-v02.api.letsencrypt.org/directory"
     dbg "acme.sh server: $acme_server"
-    dbg "acme.sh command: acme.sh --issue --standalone -d '$domain' --key-file '$key' --fullchain-file '$pem' --alpn --tlsport 8443 --force --server '$acme_server'"
-    run "acme.sh --issue --standalone -d '$domain' \
+    dbg "acme.sh command: /root/.acme.sh/acme.sh --issue --standalone -d '$domain' --key-file '$key' --fullchain-file '$pem' --alpn --tlsport 8443 --force --server '$acme_server'"
+    run "/root/.acme.sh/acme.sh --issue --standalone -d '$domain' \
         --key-file '$key' --fullchain-file '$pem' \
         --alpn --tlsport 8443 --force \
         --server '$acme_server'"
@@ -796,7 +796,7 @@ step_ssl() {
     fi
 
     # Install cert with auto-renew hook
-    run "acme.sh --install-cert -d '$domain' \
+    run "/root/.acme.sh/acme.sh --install-cert -d '$domain' \
         --key-file '$key' --fullchain-file '$pem' \
         --reloadcmd 'docker exec $nginx_container nginx -s reload 2>/dev/null || true'"
 
