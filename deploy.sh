@@ -368,30 +368,48 @@ EOF
 step_config() {
     log "=== Configuration ==="
 
-    # Common
-    prompt EMAIL "" "Let's Encrypt email"
+    # Common - accept from environment or prompt
+    EMAIL="${EMAIL:-}"
+    if [[ -z "$EMAIL" ]]; then
+        prompt EMAIL "" "Let's Encrypt email"
+    fi
     [[ -z "$EMAIL" ]] && err "Email is required"
 
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
-        prompt NODE_DOMAIN "" "Node domain (e.g., node.example.com)"
+        NODE_DOMAIN="${NODE_DOMAIN:-}"
+        if [[ -z "$NODE_DOMAIN" ]]; then
+            prompt NODE_DOMAIN "" "Node domain (e.g., node.example.com)"
+        fi
         [[ -z "$NODE_DOMAIN" ]] && err "Node domain is required"
-        prompt NODE_PORT "2222" "Node API port (only for Panel → Node communication)"
+        NODE_PORT="${NODE_PORT:-2222}"
+        if [[ "$NODE_PORT" == "2222" ]]; then
+            prompt NODE_PORT "2222" "Node API port (only for Panel → Node communication)"
+        fi
     fi
 
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
-        prompt PANEL_DOMAIN "" "Panel domain (e.g., panel.example.com)"
+        PANEL_DOMAIN="${PANEL_DOMAIN:-}"
+        if [[ -z "$PANEL_DOMAIN" ]]; then
+            prompt PANEL_DOMAIN "" "Panel domain (e.g., panel.example.com)"
+        fi
         [[ -z "$PANEL_DOMAIN" ]] && err "Panel domain is required"
 
         # SUB_PUBLIC_DOMAIN: always ends with /api/sub
         # Default = panel domain, user can override with separate subdomain
-        prompt SUB_DOMAIN "$PANEL_DOMAIN" "Subscription domain (default: panel domain)"
+        SUB_DOMAIN="${SUB_DOMAIN:-$PANEL_DOMAIN}"
+        if [[ "$SUB_DOMAIN" == "$PANEL_DOMAIN" ]]; then
+            prompt SUB_DOMAIN "$PANEL_DOMAIN" "Subscription domain (default: panel domain)"
+        fi
         SUB_PUBLIC_DOMAIN="${SUB_DOMAIN}/api/sub"
         log "SUB_PUBLIC_DOMAIN will be: $SUB_PUBLIC_DOMAIN"
     fi
 
     # PANEL_HOST only needed for node-only role (not panel+node where it's local)
     if [[ "$ROLE" == "node" ]]; then
-        prompt PANEL_HOST "" "Panel server IP address"
+        PANEL_HOST="${PANEL_HOST:-}"
+        if [[ -z "$PANEL_HOST" ]]; then
+            prompt PANEL_HOST "" "Panel server IP address"
+        fi
         [[ -z "$PANEL_HOST" ]] && err "Panel host is required"
     fi
 
