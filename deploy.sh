@@ -368,6 +368,12 @@ EOF
 step_config() {
     log "=== Configuration ==="
 
+    # Load from config file if provided
+    if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+        log "Loading configuration from $CONFIG_FILE"
+        source "$CONFIG_FILE"
+    fi
+
     # Common - accept from environment or prompt
     EMAIL="${EMAIL:-}"
     if [[ -z "$EMAIL" ]]; then
