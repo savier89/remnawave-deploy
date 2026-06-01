@@ -70,6 +70,7 @@ debug_vars() {
 # Defaults
 DRY_RUN=false; FORCE=false; STAGING=false
 DEBUG=false; DEBUG_FILE=""
+CONFIG_FILE=""
 NODE_PORT=2222
 
 usage() {
@@ -87,6 +88,7 @@ Options:
   --staging           Use Let's Encrypt staging CA (higher rate limits)
   --debug             Enable debug mode (verbose output, set -x)
   --debug-file FILE   Write debug log to FILE (implies --debug)
+  --config FILE       Load configuration from FILE (non-interactive mode)
 EOF
     exit ${1:-0}
 }
@@ -101,6 +103,7 @@ while [[ $# -gt 0 ]]; do
         --staging) STAGING=true; shift ;;
         --debug) DEBUG=true; shift ;;
         --debug-file) DEBUG=true; DEBUG_FILE="$2"; shift 2 ;;
+        --config) CONFIG_FILE="$2"; shift 2 ;;
         --help|-h) usage 0 ;;
         --*) err "Unknown: $1" ;;
         *) err "Unexpected: $1" ;;
