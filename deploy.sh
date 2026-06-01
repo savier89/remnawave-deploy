@@ -845,7 +845,7 @@ step_panel() {
       #   && sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1$pw\2|" .env
       if ! $DRY_RUN; then
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pg/" "$pd/.env"
-          sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1${pg}\2|" "$pd/.env"
+          sed -i "/^DATABASE_URL=/s\*\*\*/${pg}/" "$pd/.env"
       else
           log "DRY: sed POSTGRES_PASSWORD and DATABASE_URL"
       fi
