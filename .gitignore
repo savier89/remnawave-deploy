@@ -39,3 +39,4 @@ __pycache__/
 
 # Test configuration (contains secrets)
 test-config.sh
+test-config.env
