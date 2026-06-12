@@ -391,7 +391,7 @@ step_config() {
         fi
         [[ -z "$NODE_DOMAIN" ]] && err "Node domain is required"
         NODE_PORT="${NODE_PORT:-2222}"
-        if [[ "$NODE_PORT" == "2222" ]]; then
+        if [[ "$NODE_PORT" == "2222" && -z "${CONFIG_FILE:-}" ]]; then
             prompt NODE_PORT "2222" "Node API port (only for Panel → Node communication)"
         fi
     fi
