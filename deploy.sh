@@ -1196,20 +1196,20 @@ EOF
         cat > "$pd/docker-compose.yml" <<EOF
 services:
   remnawave-panel-nginx:
-      image: macbre/nginx-http3:latest
-      container_name: remnawave-panel-nginx
-      hostname: remnawave-panel-nginx
-      volumes:
-        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-        - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-        - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
-        - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
-      ports:
-        - "${nginx_bind}:443:443/tcp"
-        - "${nginx_bind}:443:443/udp"
-      restart: always
-      networks:
-        - remnawave-network
+    image: macbre/nginx-http3:latest
+    container_name: remnawave-panel-nginx
+    hostname: remnawave-panel-nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
+      - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+    ports:
+      - "${nginx_bind}:443:443/tcp"
+      - "${nginx_bind}:443:443/udp"
+    restart: always
+    networks:
+      - remnawave-network
 networks:
   remnawave-network:
     name: remnawave-network
