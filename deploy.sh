@@ -764,6 +764,10 @@ step_ssl() {
 
     if [[ -f "$key" && -f "$pem" ]]; then
         warn "Certs exist in $dir"
+        if [[ -n "${CONFIG_FILE:-}" ]]; then
+            ok "Skipped (config mode)"
+            return 0
+        fi
         confirm "Regenerate?" || { ok "Skipped"; return 0; }
     fi
 
