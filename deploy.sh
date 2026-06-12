@@ -1445,17 +1445,7 @@ step_start() {
 
     dbg "Starting services for role: $ROLE"
 
-    # Create Docker network (needed by official docker-compose)
-    if ! docker network inspect remnawave-network &>/dev/null; then
-        dbg "Creating remnawave-network..."
-        run "docker network create remnawave-network"
-        ok "Created remnawave-network"
-    else
-        ok "remnawave-network already exists"
-        dbg "remnawave-network: $(docker network inspect remnawave-network --format '{{.Driver}}' 2>/dev/null || echo 'unknown')"
-    fi
-
-    # Panel (panel and panel+node roles)
+     # Panel (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/docker-compose.yml" ]]; then
             dbg "Panel docker-compose.yml exists, checking if running..."
