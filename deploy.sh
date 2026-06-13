@@ -186,6 +186,12 @@ upgrade_to_unified_nginx() {
         run "openssl rand -out /opt/remnanode/ssl/quic_host.key 32"
     fi
 
+    # Generate QUIC host key for panel nginx if needed
+    if [[ ! -f "$pd/quic_host.key" ]]; then
+        dbg "Generating QUIC host key for panel nginx..."
+        run "openssl rand -out $pd/quic_host.key 32"
+    fi
+
     # Create stub.html
     cat > "$pd/stub.html" <<'EOF'
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
@@ -200,16 +206,16 @@ EOF
     cat > "$pd/nginx.conf" <<EOF
 # Panel upstream
 upstream remnawave {
-    server remnawave:3000;
+    server 127.0.0.1:3000;
 }
 
 # Panel server block
 server {
     server_name ${PANEL_DOMAIN};
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
-    listen 443 quic reuseport;
-    listen [::]:443 quic reuseport;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    listen 443 quic;
+    listen [::]:443 quic;
     http2 on;
     http3 on;
 
@@ -254,7 +260,7 @@ server {
 }
 server {
     listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic reuseport; listen [::]:443 quic reuseport;
+    listen 443 quic; listen [::]:443 quic;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
@@ -296,8 +302,8 @@ EOF
 # Sub server block
 server {
     server_name ${SUB_DOMAIN};
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
+    listen 443 ssl;
+    listen [::]:443 ssl;
     http2 on;
 
     location / {
@@ -344,11 +350,15 @@ services:
     image: macbre/nginx-http3:latest
     container_name: remnawave-unified-nginx
     network_mode: host
+    user: root
+    cap_add:
+      - NET_BIND_SERVICE
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
       - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+      - ./quic_host.key:/etc/nginx/ssl/quic_host.key:ro
       - /opt/remnanode/ssl:/etc/nginx/ssl/node:ro
       - /dev/shm:/dev/shm:ro
       - ./stub.html:/var/www/html/index.html:ro
@@ -920,16 +930,16 @@ step_panel_nginx() {
         cat > "$pd/nginx.conf" <<EOF
 # Panel upstream
 upstream remnawave {
-    server remnawave:3000;
+    server 127.0.0.1:3000;
 }
 
 # Panel server block
 server {
     server_name ${PANEL_DOMAIN};
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
-    listen 443 quic reuseport;
-    listen [::]:443 quic reuseport;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    listen 443 quic;
+    listen [::]:443 quic;
     http2 on;
     http3 on;
 
@@ -976,7 +986,7 @@ server {
 }
 server {
     listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic reuseport; listen [::]:443 quic reuseport;
+    listen 443 quic; listen [::]:443 quic;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
@@ -1018,8 +1028,8 @@ EOF
 # Sub server block
 server {
     server_name ${SUB_DOMAIN};
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
+    listen 443 ssl;
+    listen [::]:443 ssl;
     http2 on;
 
     location / {
@@ -1066,11 +1076,15 @@ services:
     image: macbre/nginx-http3:latest
     container_name: remnawave-unified-nginx
     network_mode: host
+    user: root
+    cap_add:
+      - NET_BIND_SERVICE
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       - ./privkey.key:/etc/nginx/ssl/privkey.key:ro
       - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
+      - ./quic_host.key:/etc/nginx/ssl/quic_host.key:ro
       - /opt/remnanode/ssl:/etc/nginx/ssl/node:ro
       - /dev/shm:/dev/shm:ro
       - ./stub.html:/var/www/html/index.html:ro
@@ -1105,15 +1119,15 @@ EOF
 
         cat > "$pd/nginx.conf" <<EOF
 upstream remnawave {
-    server remnawave:3000;
+    server 127.0.0.1:3000;
 }
 
 server {
     server_name ${PANEL_DOMAIN};
-    listen ${nginx_bind}:443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
-    listen ${nginx_bind}:443 quic reuseport;
-    listen [::]:443 quic reuseport;
+    listen ${nginx_bind}:443 ssl;
+    listen [::]:443 ssl;
+    listen ${nginx_bind}:443 quic;
+    listen [::]:443 quic;
     http2 on;
     http3 on;
 
@@ -1166,8 +1180,8 @@ EOF
 
 server {
     server_name ${SUB_DOMAIN};
-    listen ${nginx_bind}:443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
+    listen ${nginx_bind}:443 ssl;
+    listen [::]:443 ssl;
     http2 on;
 
     location / {
@@ -1285,7 +1299,7 @@ server {
 }
 server {
     listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic reuseport; listen [::]:443 quic reuseport;
+    listen 443 quic; listen [::]:443 quic;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
@@ -1327,6 +1341,9 @@ services:
       image: macbre/nginx-http3:latest
       container_name: remnawave-node-nginx
       network_mode: host
+      user: root
+      cap_add:
+        - NET_BIND_SERVICE
       volumes:
         - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
         - ./stub.html:/var/www/html/index.html:ro
