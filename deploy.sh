@@ -1372,6 +1372,29 @@ step_node() {
 
     dbg "Node directory: $nd, ROLE: $ROLE"
 
+    # Try to get SECRET_KEY from Panel API if token exists
+    local secret_key=""
+    local api_token=""
+
+    if [[ -f "/opt/remnawave/.api_token" ]]; then
+        api_token=$(grep "^API_TOKEN=" /opt/remnawave/.api_token | cut -d= -f2)
+        if [[ -n "$api_token" ]]; then
+            log "Found API token, fetching SECRET_KEY from Panel..."
+            local keygen_response
+            keygen_response=$(curl -s -H "X-API-Key: $api_token" "https://${PANEL_DOMAIN:-panel.chebu.site}/api/keygen" --resolve "${PANEL_DOMAIN:-panel.chebu.site}:443:127.0.0.1" 2>/dev/null || echo "")
+            if [[ -n "$keygen_response" ]]; then
+                secret_key=$(echo "$keygen_response" | grep -o '"secret_key":"[^"]*"' | cut -d'"' -f4 || echo "")
+                if [[ -n "$secret_key" ]]; then
+                    ok "SECRET_KEY obtained from Panel API"
+                else
+                    warn "Could not parse SECRET_KEY from API response"
+                fi
+            else
+                warn "Failed to fetch SECRET_KEY from Panel API"
+            fi
+        fi
+    fi
+
     # For panel+node role, we need to guide the user to copy docker-compose from Panel
     if [[ "$ROLE" == "panel+node" ]]; then
         dbg "panel+node mode: Panel is local (127.0.0.1:3000)"
@@ -1413,6 +1436,7 @@ step_node() {
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=127.0.0.1
       - PANEL_PORT=3000
+      - SECRET_KEY=${secret_key:-CHANGE_ME}
     volumes:
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
@@ -1454,6 +1478,7 @@ step_node() {
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=$PANEL_HOST
       - PANEL_PORT=3000
+      - SECRET_KEY=${secret_key:-CHANGE_ME}
     volumes:
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
@@ -1996,6 +2021,11 @@ main() {
         log "Sub:   $SUB_PUBLIC_DOMAIN"
     fi
 
+    # Post-install panel setup (API token for future node installation)
+    if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
+        step_post_install_panel
+    fi
+
     echo ""
     log "Next steps:"
     if [[ "$ROLE" == "panel" ]]; then
@@ -2016,6 +2046,59 @@ main() {
         log "3. Panel: Click 'Copy docker-compose.yml' → update /opt/remnanode/docker-compose.yml"
         log "4. Panel: Link Config Profile to Node → Enable Node"
         log "5. Restart Node: cd /opt/remnanode && docker compose up -d"
+    fi
+}
+
+# ============================================================
+# STEP 11: Post-install Panel setup (API token for Node)
+# ============================================================
+step_post_install_panel() {
+    log "=== Post-Install: Panel API Token ==="
+    log ""
+    log "To automate Node installation in the future, the script needs"
+    log "a Panel API token to generate SECRET_KEY via /api/keygen endpoint."
+    log ""
+    log "Please complete these steps:"
+    log ""
+    log "  1. Open Panel in browser: https://$PANEL_DOMAIN"
+    log "  2. Create admin user (if first login)"
+    log "  3. Login to Panel"
+    log "  4. Go to: Settings → API Tokens"
+    log "  5. Click '+' to create new API token"
+    log "  6. Copy the generated token"
+    log ""
+    log "Enter the API token below (or press Enter to skip):"
+    log ""
+
+    read -rp "  API Token: " api_token
+
+    if [[ -n "$api_token" ]]; then
+        # Verify the token works
+        log "Verifying API token..."
+        local response
+        response=$(curl -s -w "\n%{http_code}" -H "X-API-Key: $api_token" "https://$PANEL_DOMAIN/api/keygen" --resolve "$PANEL_DOMAIN:443:127.0.0.1" 2>/dev/null || echo "000")
+        local http_code
+        http_code=$(echo "$response" | tail -1)
+        local body
+        body=$(echo "$response" | head -n -1)
+
+        if [[ "$http_code" == "200" ]]; then
+            # Save token for future use
+            mkdir -p /opt/remnawave
+            echo "API_TOKEN=$api_token" > /opt/remnawave/.api_token
+            chmod 600 /opt/remnawave/.api_token
+            ok "API token verified and saved to /opt/remnawave/.api_token"
+            log ""
+            log "Future Node installations will use this token automatically."
+        else
+            warn "API token verification failed (HTTP $http_code)"
+            log "The token will not be saved. You can add it later manually:"
+            log "  echo 'API_TOKEN=$api_token' > /opt/remnawave/.api_token"
+        fi
+    else
+        log "Skipping API token setup. You can add it later:"
+        log "  1. Create API token in Panel: Settings → API Tokens"
+        log "  2. Save it: echo 'API_TOKEN=<token>' > /opt/remnawave/.api_token"
     fi
 }
 
