@@ -414,9 +414,15 @@ step_config() {
 
     # PANEL_HOST only needed for node-only role (not panel+node where it's local)
     if [[ "$ROLE" == "node" ]]; then
-        PANEL_HOST="${PANEL_HOST:-}"
-        if [[ -z "$PANEL_HOST" ]]; then
-            prompt PANEL_HOST "" "Panel server IP address"
+        # Auto-detect if panel is on the same server
+        if [[ -d "/opt/remnawave" ]] || docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^remnawave$"; then
+            PANEL_HOST="127.0.0.1"
+            log "Panel detected on this server — using PANEL_HOST=127.0.0.1"
+        else
+            PANEL_HOST="${PANEL_HOST:-}"
+            if [[ -z "$PANEL_HOST" ]]; then
+                prompt PANEL_HOST "" "Panel server IP address"
+            fi
         fi
         [[ -z "$PANEL_HOST" ]] && err "Panel host is required"
     fi
