@@ -165,6 +165,26 @@ upgrade_to_unified_nginx() {
 
     local pd="/opt/remnawave/nginx"
 
+    # Pre-flight checks
+    # 1. Check port 443 availability (host mode will bind directly)
+    if ss -tlnp 2>/dev/null | grep -q ':443 ' || netstat -tlnp 2>/dev/null | grep -q ':443 '; then
+        warn "Port 443 is already in use by another process"
+        warn "Unified nginx uses host mode and will conflict"
+        confirm "Continue anyway? (existing service on 443 will be displaced)" || err "Aborted"
+    fi
+
+    # 2. Check Node SSL certificates exist
+    if [[ ! -f "/opt/remnanode/ssl/fullchain.pem" || ! -f "/opt/remnanode/ssl/privkey.key" ]]; then
+        warn "Node SSL certificates not found in /opt/remnanode/ssl/"
+        warn "Unified nginx requires Node SSL for $NODE_DOMAIN"
+        confirm "Continue without Node SSL? (Node domain will not work)" || err "Aborted"
+    fi
+
+    # 3. Check if panel nginx is using Docker network (needs upstream fix)
+    if [[ -f "$pd/docker-compose.yml" ]] && grep -q "remnawave-network" "$pd/docker-compose.yml"; then
+        dbg "Panel nginx uses Docker network — upstream will be switched to 127.0.0.1:3000 (host mode)"
+    fi
+
     # Stop old containers
     if $HAS_PANEL_NGINX; then
         dbg "Stopping remnawave-panel-nginx..."
