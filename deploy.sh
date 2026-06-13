@@ -932,6 +932,15 @@ step_panel() {
 }' "$pd/docker-compose.yml"
     fi
 
+    # Add extra_hosts for Node connectivity (Panel in Docker network needs to reach Node on host)
+    if ! $DRY_RUN && [[ -n "${NODE_DOMAIN:-}" ]]; then
+        local host_ip
+        host_ip=$(hostname -I | awk '{print $1}')
+        dbg "Adding extra_hosts for Node: $NODE_DOMAIN -> $host_ip"
+        sed -i '/^  remnawave:/,/^[^ ]/{/extra_hosts:/!{/volumes:/i\    extra_hosts:\n      - "'"$NODE_DOMAIN"':'"$host_ip"'"
+}' "$pd/docker-compose.yml"
+    fi
+
     # Debug: show final .env state (masking secrets)
     if $DEBUG; then
         dbg "--- Panel .env (secrets masked) ---"
