@@ -1555,12 +1555,18 @@ step_start() {
 
         # Configure firewall for Node port
         if command -v ufw &>/dev/null; then
-            local host_ip
-            host_ip=$(hostname -I | awk '{print $1}')
+            local panel_ip
+            # Resolve Panel IP from PANEL_HOST (domain or IP)
+            if [[ -n "${PANEL_HOST:-}" ]]; then
+                panel_ip=$(getent hosts "$PANEL_HOST" 2>/dev/null | head -1 | awk '{print $1}')
+                [[ -z "$panel_ip" ]] && panel_ip="${PANEL_HOST}"
+            else
+                panel_ip=$(hostname -I | awk '{print $1}')
+            fi
             log "=== Firewall: Node port $NODE_PORT ==="
-            log "Allowing access from 127.0.0.1 and $host_ip only"
+            log "Allowing access from 127.0.0.1 and Panel IP ($panel_ip) only"
             run "ufw allow from 127.0.0.1 to any port $NODE_PORT"
-            run "ufw allow from $host_ip to any port $NODE_PORT"
+            run "ufw allow from $panel_ip to any port $NODE_PORT comment 'Panel server'"
             ok "Firewall configured for Node port"
         fi
     fi
