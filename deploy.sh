@@ -432,8 +432,9 @@ step_config() {
             fi
 
             # API token (optional, for automatic SECRET_KEY generation)
+            # In config mode (--config flag), skip prompt if not provided
             API_TOKEN="${API_TOKEN:-}"
-            if [[ -z "$API_TOKEN" ]]; then
+            if [[ -z "$API_TOKEN" && -z "${CONFIG_FILE:-}" ]]; then
                 log ""
                 log "Optional: Provide Panel API token to auto-generate SECRET_KEY for Node"
                 log "  1. Open Panel: https://$PANEL_DOMAIN"
