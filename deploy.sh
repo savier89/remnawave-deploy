@@ -795,20 +795,22 @@ step_ssl() {
 
     local key="$dir/privkey.key"; local pem="$dir/fullchain.pem"
 
-    # Check BEFORE mkdir
-    if [[ -f "$key" && -f "$pem" ]]; then
-        ok "SSL certs exist in $dir — using existing certificates"
+    # Check if SSL_CERT_DIR is set and has certs
+    if [[ -n "${SSL_CERT_DIR:-}" && -f "${SSL_CERT_DIR}/fullchain.pem" && -f "${SSL_CERT_DIR}/privkey.key" ]]; then
+        run "mkdir -p $dir"
+        run "cp -f ${SSL_CERT_DIR}/fullchain.pem $pem"
+        run "cp -f ${SSL_CERT_DIR}/privkey.key $key"
+        ok "SSL certs copied from $SSL_CERT_DIR"
         return 0
     fi
 
     run "mkdir -p $dir"
 
-    # Check AFTER mkdir (in case certs were copied before)
+    # Check if certs already exist
     if [[ -f "$key" && -f "$pem" ]]; then
         ok "SSL certs exist in $dir — using existing certificates"
         return 0
     fi
-
     # Stop system nginx on port 80 (if running)
     run "nginx -s stop 2>/dev/null || true"
     sleep 1
