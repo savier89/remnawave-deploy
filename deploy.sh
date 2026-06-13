@@ -165,6 +165,16 @@ upgrade_to_unified_nginx() {
 
     local pd="/opt/remnawave/nginx"
 
+    # Load PANEL_DOMAIN and SUB_DOMAIN from existing panel .env if not set
+    if [[ -z "${PANEL_DOMAIN:-}" && -f "/opt/remnawave/.env" ]]; then
+        PANEL_DOMAIN=$(grep "^FRONT_END_DOMAIN=" /opt/remnawave/.env | cut -d= -f2)
+        SUB_DOMAIN=$(grep "^SUB_PUBLIC_DOMAIN=" /opt/remnawave/.env | cut -d= -f2 | sed 's|/api/sub$||')
+        log "Loaded PANEL_DOMAIN=$PANEL_DOMAIN, SUB_DOMAIN=$SUB_DOMAIN from existing panel config"
+    fi
+
+    [[ -z "$PANEL_DOMAIN" ]] && err "PANEL_DOMAIN is required for unified nginx"
+    SUB_DOMAIN="${SUB_DOMAIN:-$PANEL_DOMAIN}"
+
     # Pre-flight checks
     # 1. Check port 443 availability (host mode will bind directly)
     if ss -tlnp 2>/dev/null | grep -q ':443 ' || netstat -tlnp 2>/dev/null | grep -q ':443 '; then
