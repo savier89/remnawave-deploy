@@ -1094,7 +1094,7 @@ EOF
 
         cat > "$pd/nginx.conf" <<EOF
 upstream remnawave {
-    server 127.0.0.1:3000;
+    server remnawave:3000;
 }
 
 server {
