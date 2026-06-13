@@ -424,6 +424,25 @@ step_config() {
             if [[ -z "$PANEL_HOST" ]]; then
                 prompt PANEL_HOST "" "Panel server IP address"
             fi
+
+            # Panel domain (for API access)
+            PANEL_DOMAIN="${PANEL_DOMAIN:-}"
+            if [[ -z "$PANEL_DOMAIN" ]]; then
+                prompt PANEL_DOMAIN "" "Panel domain (e.g., panel.example.com) — for API access"
+            fi
+
+            # API token (optional, for automatic SECRET_KEY generation)
+            API_TOKEN="${API_TOKEN:-}"
+            if [[ -z "$API_TOKEN" ]]; then
+                log ""
+                log "Optional: Provide Panel API token to auto-generate SECRET_KEY for Node"
+                log "  1. Open Panel: https://$PANEL_DOMAIN"
+                log "  2. Settings → API Tokens → Create token"
+                log "  3. Paste token below (or press Enter to skip)"
+                log ""
+                read -rp "  API Token: " api_token_input
+                API_TOKEN="${api_token_input:-}"
+            fi
         fi
         [[ -z "$PANEL_HOST" ]] && err "Panel host is required"
     fi
@@ -1376,22 +1395,29 @@ step_node() {
     local secret_key=""
     local api_token=""
 
-    if [[ -f "/opt/remnawave/.api_token" ]]; then
+    # Check config file API_TOKEN first (remote panel case)
+    if [[ -n "${API_TOKEN:-}" ]]; then
+        api_token="$API_TOKEN"
+        log "Using API token from config"
+    # Check local .api_token file (same-server panel case)
+    elif [[ -f "/opt/remnawave/.api_token" ]]; then
         api_token=$(grep "^API_TOKEN=" /opt/remnawave/.api_token | cut -d= -f2)
-        if [[ -n "$api_token" ]]; then
-            log "Found API token, fetching SECRET_KEY from Panel..."
-            local keygen_response
-            keygen_response=$(curl -s -H "X-API-Key: $api_token" "https://${PANEL_DOMAIN:-panel.chebu.site}/api/keygen" --resolve "${PANEL_DOMAIN:-panel.chebu.site}:443:127.0.0.1" 2>/dev/null || echo "")
-            if [[ -n "$keygen_response" ]]; then
-                secret_key=$(echo "$keygen_response" | grep -o '"secret_key":"[^"]*"' | cut -d'"' -f4 || echo "")
-                if [[ -n "$secret_key" ]]; then
-                    ok "SECRET_KEY obtained from Panel API"
-                else
-                    warn "Could not parse SECRET_KEY from API response"
-                fi
+        [[ -n "$api_token" ]] && log "Found API token in /opt/remnawave/.api_token"
+    fi
+
+    if [[ -n "$api_token" && -n "${PANEL_DOMAIN:-}" ]]; then
+        log "Fetching SECRET_KEY from Panel API..."
+        local keygen_response
+        keygen_response=$(curl -s -H "X-API-Key: $api_token" "https://$PANEL_DOMAIN/api/keygen" 2>/dev/null || echo "")
+        if [[ -n "$keygen_response" ]]; then
+            secret_key=$(echo "$keygen_response" | grep -o '"secret_key":"[^"]*"' | cut -d'"' -f4 || echo "")
+            if [[ -n "$secret_key" ]]; then
+                ok "SECRET_KEY obtained from Panel API"
             else
-                warn "Failed to fetch SECRET_KEY from Panel API"
+                warn "Could not parse SECRET_KEY from API response"
             fi
+        else
+            warn "Failed to fetch SECRET_KEY from Panel API"
         fi
     fi
 
