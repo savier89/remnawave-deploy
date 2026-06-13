@@ -1378,6 +1378,8 @@ step_node() {
     image: remnawave/node:latest
     network_mode: host
     restart: always
+    cap_add:
+      - NET_ADMIN
     environment:
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=127.0.0.1
@@ -1417,6 +1419,8 @@ step_node() {
     image: remnawave/node:latest
     network_mode: host
     restart: always
+    cap_add:
+      - NET_ADMIN
     environment:
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=$PANEL_HOST
