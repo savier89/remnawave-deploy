@@ -1562,15 +1562,10 @@ step_start() {
      # Panel (panel and panel+node roles)
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/docker-compose.yml" ]]; then
-            dbg "Panel docker-compose.yml exists, checking if running..."
-            if docker ps --format "{{.Names}}" | grep -q remnawave; then
-                warn "Panel already running, skipping"
-            else
-                dbg "Starting Panel..."
-                run "cd /opt/remnawave && docker compose up -d"
-                ok "Panel started"
-                dbg "Panel containers: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave || echo 'none')"
-            fi
+            dbg "Panel docker-compose.yml exists, starting..."
+            run "cd /opt/remnawave && docker compose up -d"
+            ok "Panel started"
+            dbg "Panel containers: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave || echo 'none')"
         fi
     fi
 
@@ -1579,25 +1574,16 @@ step_start() {
         if [[ -f "/opt/remnawave/nginx/docker-compose.yml" ]]; then
             if [[ "$ROLE" == "panel+node" ]]; then
                 # Unified nginx in panel+node mode
-                local nginx_name="remnawave-unified-nginx"
-                if docker ps --format "{{.Names}}" | grep -q "$nginx_name"; then
-                    warn "$nginx_name already running, skipping"
-                else
-                    dbg "Starting unified nginx..."
-                    run "cd /opt/remnawave/nginx && docker compose up -d"
-                    ok "Unified Nginx started"
-                    dbg "Unified nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-unified-nginx || echo 'none')"
-                fi
+                dbg "Starting unified nginx..."
+                run "cd /opt/remnawave/nginx && docker compose up -d"
+                ok "Unified Nginx started"
+                dbg "Unified nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-unified-nginx || echo 'none')"
             else
                 # Panel-only nginx
-                if docker ps --format "{{.Names}}" | grep -q remnawave-panel-nginx; then
-                    warn "remnawave-panel-nginx already running, skipping"
-                else
-                    dbg "Starting Panel nginx..."
-                    run "cd /opt/remnawave/nginx && docker compose up -d"
-                    ok "Panel Nginx started"
-                    dbg "Panel nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-panel-nginx || echo 'none')"
-                fi
+                dbg "Starting Panel nginx..."
+                run "cd /opt/remnawave/nginx && docker compose up -d"
+                ok "Panel Nginx started"
+                dbg "Panel nginx container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave-panel-nginx || echo 'none')"
             fi
         fi
     fi
