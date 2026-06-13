@@ -1726,24 +1726,16 @@ step_create_admin() {
     local admin_user
     admin_user="admin_$(openssl rand -hex 3 | head -c 8)"
     
-    # Prompt for admin password
-    local admin_pass admin_pass_confirm
-    prompt admin_pass "" "Admin password"
-    prompt admin_pass_confirm "" "Confirm admin password"
-
-    if [[ -z "$admin_pass" ]]; then
-        err "Admin password is required"
-    fi
-
-    # Validate password complexity (Remnawave requires min 24 chars)
-    if [[ ${#admin_pass} -lt 24 ]]; then
-        err "Password must be at least 24 characters long (Remnawave requirement)"
-    fi
-
-    if [[ "$admin_pass" != "$admin_pass_confirm" ]]; then
-        err "Passwords do not match"
-    fi
-
+    # Generate random admin password (24+ chars)
+    local admin_pass
+    admin_pass="$(openssl rand -base64 18 | tr -d '/+=' | head -c 24)"
+    
+    # Ensure password has uppercase and lowercase (Remnawave requirement)
+    admin_pass="${admin_pass^}$(echo "$admin_pass" | tr '[:upper:]' '[:lower:]' | head -c 12)$(openssl rand -hex 3)"
+    
+    dbg "Generated admin username: $admin_user"
+    dbg "Generated admin password length: ${#admin_pass}"
+    
     # Create admin via API per OpenAPI spec:
     # POST /api/auth/register
     # Body: { "username": "string", "password": "string" }
