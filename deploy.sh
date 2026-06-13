@@ -795,6 +795,9 @@ step_ssl() {
 
     run "mkdir -p $dir"
     local key="$dir/privkey.key"; local pem="$dir/fullchain.pem"
+    dbg "Checking for SSL certs: key=$key pem=$pem"
+    dbg "key exists: $(ls -la "$key" 2>/dev/null || echo 'NO')"
+    dbg "pem exists: $(ls -la "$pem" 2>/dev/null || echo 'NO')"
 
     if [[ -f "$key" && -f "$pem" ]]; then
         ok "SSL certs exist in $dir — using existing certificates"
