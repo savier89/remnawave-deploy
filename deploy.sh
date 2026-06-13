@@ -1552,6 +1552,17 @@ step_start() {
                 dbg "Node container: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnanode || echo 'none')"
             fi
         fi
+
+        # Configure firewall for Node port
+        if command -v ufw &>/dev/null; then
+            local host_ip
+            host_ip=$(hostname -I | awk '{print $1}')
+            log "=== Firewall: Node port $NODE_PORT ==="
+            log "Allowing access from 127.0.0.1 and $host_ip only"
+            run "ufw allow from 127.0.0.1 to any port $NODE_PORT"
+            run "ufw allow from $host_ip to any port $NODE_PORT"
+            ok "Firewall configured for Node port"
+        fi
     fi
 }
 
