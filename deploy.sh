@@ -930,10 +930,11 @@ step_panel() {
         dbg "Modifying docker-compose.yml (SSL + extra_hosts)"
 
         # Install PyYAML if not present
-        pip3 install pyyaml -q 2>/dev/null || pip install pyyaml -q 2>/dev/null || true
+        apt-get install -y python3-yaml -q 2>/dev/null || pip3 install pyyaml -q 2>/dev/null || pip install pyyaml -q 2>/dev/null || true
 
         # Use Python to modify docker-compose.yml safely
-        python3 << 'PYEOF'
+        export NODE_DOMAIN
+        python3 << PYEOF
 import yaml
 import os
 
@@ -954,7 +955,7 @@ if "services" in dc and "remnawave" in dc["services"]:
     # Add extra_hosts for Node connectivity
     node_domain = os.environ.get("NODE_DOMAIN", "")
     if node_domain:
-        host_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        host_ip = os.popen("hostname -I | awk '{print \$1}'").read().strip()
         if host_ip:
             eh = f"{node_domain}:{host_ip}"
             if "extra_hosts" not in service:
