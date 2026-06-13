@@ -1699,21 +1699,33 @@ step_create_admin() {
     log "=== Create Admin ==="
     dbg "Creating admin for Panel at: https://$PANEL_DOMAIN"
 
-    # Wait for Panel to be ready
-    local retries=12
+    # Wait for Panel container to be healthy
+    local retries=30
     local delay=5
     local ready=false
 
     for i in $(seq 1 $retries); do
-        local code
+        local health_status
         dbg "Waiting for Panel... attempt $i/$retries"
-        code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
-        dbg "Panel health check: HTTP $code"
-        if [[ "$code" != "000" ]]; then
+        health_status=$(docker inspect --format='{{.State.Health.Status}}' remnawave 2>/dev/null || echo "not_found")
+        dbg "Panel health status: $health_status"
+        
+        if [[ "$health_status" == "healthy" ]]; then
             ready=true
             break
         fi
-        warn "Waiting for Panel... ($i/$retries)"
+        
+        # Also check if API responds (fallback)
+        local code
+        code=$(curl -s -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN/api/health" --resolve "$PANEL_DOMAIN:443:127.0.0.1" --insecure 2>/dev/null || echo "000")
+        dbg "Panel API check: HTTP $code"
+        
+        if [[ "$code" == "200" ]]; then
+            ready=true
+            break
+        fi
+        
+        warn "Waiting for Panel... ($i/$retries, health=$health_status)"
         sleep $delay
     done
 
