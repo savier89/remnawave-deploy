@@ -793,12 +793,17 @@ step_ssl() {
     local domain="${1:?}"; local dir="${2:?}"
     log "=== SSL: $domain -> $dir ==="
 
-    run "mkdir -p $dir"
     local key="$dir/privkey.key"; local pem="$dir/fullchain.pem"
-    dbg "Checking for SSL certs: key=$key pem=$pem"
-    dbg "key exists: $(ls -la "$key" 2>/dev/null || echo 'NO')"
-    dbg "pem exists: $(ls -la "$pem" 2>/dev/null || echo 'NO')"
 
+    # Check BEFORE mkdir
+    if [[ -f "$key" && -f "$pem" ]]; then
+        ok "SSL certs exist in $dir — using existing certificates"
+        return 0
+    fi
+
+    run "mkdir -p $dir"
+
+    # Check AFTER mkdir (in case certs were copied before)
     if [[ -f "$key" && -f "$pem" ]]; then
         ok "SSL certs exist in $dir — using existing certificates"
         return 0
