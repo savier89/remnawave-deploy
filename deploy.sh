@@ -1563,6 +1563,13 @@ step_start() {
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         if [[ -f "/opt/remnawave/docker-compose.yml" ]]; then
             dbg "Panel docker-compose.yml exists, starting..."
+            
+            # Check if database volume exists and remove it to avoid password mismatch
+            if docker volume ls --format '{{.Name}}' | grep -q remnawave-db-data; then
+                dbg "Existing database volume found, removing to avoid password mismatch..."
+                docker volume rm remnawave-db-data 2>/dev/null || true
+            fi
+            
             run "cd /opt/remnawave && docker compose up -d"
             ok "Panel started"
             dbg "Panel containers: $(docker ps --format '{{.Names}} {{.Status}}' | grep remnawave || echo 'none')"
