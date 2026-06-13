@@ -797,12 +797,8 @@ step_ssl() {
     local key="$dir/privkey.key"; local pem="$dir/fullchain.pem"
 
     if [[ -f "$key" && -f "$pem" ]]; then
-        warn "Certs exist in $dir"
-        if [[ -n "${CONFIG_FILE:-}" ]]; then
-            ok "Skipped (config mode)"
-            return 0
-        fi
-        confirm "Regenerate?" || { ok "Skipped"; return 0; }
+        ok "SSL certs exist in $dir — using existing certificates"
+        return 0
     fi
 
     # Stop system nginx on port 80 (if running)
