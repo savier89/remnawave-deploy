@@ -212,10 +212,10 @@ upstream remnawave {
 # Panel server block
 server {
     server_name ${PANEL_DOMAIN};
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    listen 443 quic;
-    listen [::]:443 quic;
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
     http2 on;
     http3 on;
 
@@ -1298,8 +1298,8 @@ server {
     return 301 https://\$host\$request_uri;
 }
 server {
-    listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic; listen [::]:443 quic;
+    listen 443 ssl reuseport; listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport; listen [::]:443 quic reuseport;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
