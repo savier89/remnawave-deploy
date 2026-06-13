@@ -1429,6 +1429,31 @@ step_node() {
         fi
     fi
 
+    if [[ -z "$secret_key" ]]; then
+        log ""
+        log "=== SECRET_KEY for Node ==="
+        log ""
+        log "The Node requires a SECRET_KEY to connect to the Panel."
+        log "You can obtain it from the Panel UI:"
+        log ""
+        log "  1. Open Panel: https://$PANEL_DOMAIN"
+        log "  2. Go to: Nodes → Management → Click + (Add Node)"
+        log "  3. Fill in Node Name, Address, Port"
+        log "  4. Click 'Copy docker-compose.yml'"
+        log "  5. Copy the SECRET_KEY value from the docker-compose.yml"
+        log ""
+        log "Enter the SECRET_KEY below:"
+        log ""
+        
+        read -rp "  SECRET_KEY: " secret_key
+        
+        if [[ -z "$secret_key" ]]; then
+            warn "No SECRET_KEY provided, using CHANGE_ME placeholder"
+            warn "The Node will NOT work until you provide a valid SECRET_KEY"
+            secret_key="CHANGE_ME"
+        fi
+    fi
+
     # For panel+node role, we need to guide the user to copy docker-compose from Panel
     if [[ "$ROLE" == "panel+node" ]]; then
         dbg "panel+node mode: Panel is local (127.0.0.1:3000)"
@@ -1470,7 +1495,7 @@ step_node() {
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=127.0.0.1
       - PANEL_PORT=3000
-      - SECRET_KEY=${secret_key:-CHANGE_ME}
+      - SECRET_KEY=$secret_key
     volumes:
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
@@ -1512,7 +1537,7 @@ step_node() {
       - NODE_PORT=$NODE_PORT
       - PANEL_HOST=$PANEL_HOST
       - PANEL_PORT=3000
-      - SECRET_KEY=${secret_key:-CHANGE_ME}
+      - SECRET_KEY=$secret_key
     volumes:
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
@@ -1711,14 +1736,17 @@ step_create_admin() {
     ok "Panel is ready!"
     echo ""
 
-    # Prompt for admin credentials
-    local admin_user admin_pass admin_pass_confirm
-    prompt admin_user "admin" "Admin username"
+    # Generate random admin username
+    local admin_user
+    admin_user="admin_$(openssl rand -hex 3 | head -c 8)"
+    
+    # Prompt for admin password
+    local admin_pass admin_pass_confirm
     prompt admin_pass "" "Admin password"
     prompt admin_pass_confirm "" "Confirm admin password"
 
-    if [[ -z "$admin_user" || -z "$admin_pass" ]]; then
-        err "Admin credentials are required"
+    if [[ -z "$admin_pass" ]]; then
+        err "Admin password is required"
     fi
 
     # Validate password complexity (Remnawave requires min 24 chars)
@@ -2095,11 +2123,10 @@ step_post_install_panel() {
     log "Please complete these steps:"
     log ""
     log "  1. Open Panel in browser: https://$PANEL_DOMAIN"
-    log "  2. Create admin user (if first login)"
-    log "  3. Login to Panel"
-    log "  4. Go to: Settings → API Tokens"
-    log "  5. Click '+' to create new API token"
-    log "  6. Copy the generated token"
+    log "  2. Login with your admin account"
+    log "  3. Go to: Settings → API Tokens"
+    log "  4. Click '+' to create new API token"
+    log "  5. Copy the generated token"
     log ""
     log "Enter the API token below (or press Enter to skip):"
     log ""
@@ -2110,7 +2137,7 @@ step_post_install_panel() {
         # Verify the token works
         log "Verifying API token..."
         local response
-        response=$(curl -s -w "\n%{http_code}" -H "X-API-Key: $api_token" "https://$PANEL_DOMAIN/api/keygen" --resolve "$PANEL_DOMAIN:443:127.0.0.1" 2>/dev/null || echo "000")
+        response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $api_token" "https://$PANEL_DOMAIN/api/keygen" --resolve "$PANEL_DOMAIN:443:127.0.0.1" 2>/dev/null || echo "000")
         local http_code
         http_code=$(echo "$response" | tail -1)
         local body
