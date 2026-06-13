@@ -928,8 +928,14 @@ step_panel() {
     # This lets Panel read certs and push them to Node during config updates
     if ! $DRY_RUN; then
         dbg "Modifying docker-compose.yml (SSL + extra_hosts)"
+
+        # Install PyYAML if not present
+        pip3 install pyyaml -q 2>/dev/null || pip install pyyaml -q 2>/dev/null || true
+
+        # Use Python to modify docker-compose.yml safely
         python3 << 'PYEOF'
 import yaml
+import os
 
 with open("/opt/remnawave/docker-compose.yml", "r") as f:
     dc = yaml.safe_load(f)
@@ -946,7 +952,6 @@ if "services" in dc and "remnawave" in dc["services"]:
         print("Added SSL volume")
 
     # Add extra_hosts for Node connectivity
-    import os
     node_domain = os.environ.get("NODE_DOMAIN", "")
     if node_domain:
         host_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
