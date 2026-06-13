@@ -703,6 +703,8 @@ step_prerequisites() {
             log "Generating DH parameters for Node (this may take a minute)..."
             run "openssl dhparam -out /opt/remnanode/nginx/dhparam.pem 2048"
         fi
+        # Copy dhparam to ssl dir (mounted as /etc/nginx/ssl in container)
+        run "cp -f /opt/remnanode/nginx/dhparam.pem /opt/remnanode/ssl/dhparam.pem"
     fi
 
     ok "Dependencies OK"
@@ -1359,7 +1361,6 @@ services:
       volumes:
         - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
         - ./stub.html:/var/www/html/index.html:ro
-        - ./dhparam.pem:/etc/nginx/ssl/dhparam.pem:ro
         - /opt/remnanode/ssl:/etc/nginx/ssl:ro
         - /dev/shm:/dev/shm:ro
       restart: always
