@@ -937,9 +937,20 @@ step_panel() {
         local host_ip
         host_ip=$(hostname -I | awk '{print $1}')
         dbg "Adding extra_hosts for Node: $NODE_DOMAIN -> $host_ip"
-        # Add extra_hosts before volumes section in remnawave service
-        sed -i "/^  remnawave:/,/^[^ ]/{/extra_hosts:/!{/volumes:/i\\    extra_hosts:\\n      - \"${NODE_DOMAIN}:${host_ip}\"
-}}" "$pd/docker-compose.yml"
+        # Use Python to modify docker-compose.yml safely
+        python3 -c "
+import yaml, sys
+with open('$pd/docker-compose.yml', 'r') as f:
+    dc = yaml.safe_load(f)
+if 'services' in dc and 'remnawave' in dc['services']:
+    if 'extra_hosts' not in dc['services']['remnawave']:
+        dc['services']['remnawave']['extra_hosts'] = ['$NODE_DOMAIN:$host_ip']
+        with open('$pd/docker-compose.yml', 'w') as f:
+            yaml.dump(dc, f, default_flow_style=False, sort_keys=False)
+        print('Added extra_hosts')
+    else:
+        print('extra_hosts already exists')
+" 2>&1 || warn "Failed to add extra_hosts (yaml module may be missing)"
     fi
 
     # Debug: show final .env state (masking secrets)
