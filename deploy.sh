@@ -926,31 +926,41 @@ step_panel() {
 
     # Add SSL volume for Panel (per docs: mount /opt/remnawave/nginx as SSL source)
     # This lets Panel read certs and push them to Node during config updates
-    if ! $DRY_RUN && ! grep -q "/var/lib/remnawave/configs/xray/ssl" "$pd/docker-compose.yml"; then
-        dbg "Adding SSL volume mount to docker-compose.yml"
-        sed -i '/^  remnawave:/,/^[^ ]/{/volumes:/a\      - /opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl:ro
-}' "$pd/docker-compose.yml"
-    fi
+    if ! $DRY_RUN; then
+        dbg "Modifying docker-compose.yml (SSL + extra_hosts)"
+        python3 << 'PYEOF'
+import yaml
 
-    # Add extra_hosts for Node connectivity (Panel in Docker network needs to reach Node on host)
-    if ! $DRY_RUN && [[ -n "${NODE_DOMAIN:-}" ]]; then
-        local host_ip
-        host_ip=$(hostname -I | awk '{print $1}')
-        dbg "Adding extra_hosts for Node: $NODE_DOMAIN -> $host_ip"
-        # Use Python to modify docker-compose.yml safely
-        python3 -c "
-import yaml, sys
-with open('$pd/docker-compose.yml', 'r') as f:
+with open("/opt/remnawave/docker-compose.yml", "r") as f:
     dc = yaml.safe_load(f)
-if 'services' in dc and 'remnawave' in dc['services']:
-    if 'extra_hosts' not in dc['services']['remnawave']:
-        dc['services']['remnawave']['extra_hosts'] = ['$NODE_DOMAIN:$host_ip']
-        with open('$pd/docker-compose.yml', 'w') as f:
-            yaml.dump(dc, f, default_flow_style=False, sort_keys=False)
-        print('Added extra_hosts')
-    else:
-        print('extra_hosts already exists')
-" 2>&1 || warn "Failed to add extra_hosts (yaml module may be missing)"
+
+if "services" in dc and "remnawave" in dc["services"]:
+    service = dc["services"]["remnawave"]
+
+    # Add SSL volume if not present
+    ssl_vol = "/opt/remnawave/nginx:/var/lib/remnawave/configs/xray/ssl:ro"
+    if "volumes" not in service:
+        service["volumes"] = []
+    if ssl_vol not in service["volumes"]:
+        service["volumes"].insert(0, ssl_vol)
+        print("Added SSL volume")
+
+    # Add extra_hosts for Node connectivity
+    import os
+    node_domain = os.environ.get("NODE_DOMAIN", "")
+    if node_domain:
+        host_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        if host_ip:
+            eh = f"{node_domain}:{host_ip}"
+            if "extra_hosts" not in service:
+                service["extra_hosts"] = []
+            if eh not in service["extra_hosts"]:
+                service["extra_hosts"].append(eh)
+                print(f"Added extra_hosts: {eh}")
+
+    with open("/opt/remnawave/docker-compose.yml", "w") as f:
+        yaml.dump(dc, f, default_flow_style=False, sort_keys=False)
+PYEOF
     fi
 
     # Debug: show final .env state (masking secrets)
