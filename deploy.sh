@@ -234,15 +234,6 @@ EOF
 
     # Generate unified nginx config
     cat > "$pd/nginx.conf" <<EOF
-# Worker override
-worker_processes 4;
-worker_rlimit_nofile 65535;
-
-events {
-    worker_connections 4096;
-    multi_accept on;
-}
-
 # Panel upstream
 upstream remnawave {
     server 127.0.0.1:3000;
