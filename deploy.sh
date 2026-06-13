@@ -1415,98 +1415,48 @@ step_node() {
 
     dbg "Node directory: $nd, ROLE: $ROLE"
 
-    # Try to get SECRET_KEY from Panel API if token exists
-    local secret_key=""
-    local api_token=""
-
-    # Check config file API_TOKEN first (remote panel case)
-    if [[ -n "${API_TOKEN:-}" ]]; then
-        api_token="$API_TOKEN"
-        log "Using API token from config"
-    # Check local .api_token file (same-server panel case)
-    elif [[ -f "/opt/remnawave/.api_token" ]]; then
+    # Save API token for future use
+    local api_token="${API_TOKEN:-}"
+    if [[ -z "$api_token" && -f "/opt/remnawave/.api_token" ]]; then
         api_token=$(grep "^API_TOKEN=" /opt/remnawave/.api_token | cut -d= -f2)
-        [[ -n "$api_token" ]] && log "Found API token in /opt/remnawave/.api_token"
     fi
 
-    if [[ -n "$api_token" && -n "${PANEL_DOMAIN:-}" ]]; then
-        log "Fetching SECRET_KEY from Panel API..."
-        local keygen_response
-        keygen_response=$(curl -s -H "Authorization: Bearer $api_token" "https://$PANEL_DOMAIN/api/keygen" 2>/dev/null || echo "")
-        if [[ -n "$keygen_response" ]]; then
-            # Parse JWT public key from response
-            local pub_key_b64
-            pub_key_b64=$(echo "$keygen_response" | python3 -c "import sys,json,base64; data=json.load(sys.stdin); print(data['response']['pubKey'])" 2>/dev/null || echo "")
-            if [[ -n "$pub_key_b64" ]]; then
-                secret_key=$(echo "$pub_key_b64" | base64 -d | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['jwtPublicKey'].replace('\n',''))" 2>/dev/null || echo "")
-                if [[ -n "$secret_key" ]]; then
-                    ok "SECRET_KEY obtained from Panel API"
-                else
-                    warn "Could not parse SECRET_KEY from API response"
-                fi
-            else
-                warn "Could not parse pubKey from API response"
-            fi
-        else
-            warn "Failed to fetch SECRET_KEY from Panel API"
-        fi
+    if [[ -n "$api_token" ]]; then
+        # Save token to file for future script runs
+        mkdir -p "$nd"
+        echo "API_TOKEN=$api_token" > "$nd/.api_token"
+        chmod 600 "$nd/.api_token"
+        ok "API token saved to $nd/.api_token"
     fi
 
-    if [[ -z "$secret_key" ]]; then
-        log ""
-        log "=== SECRET_KEY for Node ==="
-        log ""
-        log "The Node requires a SECRET_KEY to connect to the Panel."
-        log "You can obtain it from the Panel UI:"
-        log ""
-        log "  1. Open Panel: https://$PANEL_DOMAIN"
-        log "  2. Go to: Nodes → Management → Click + (Add Node)"
-        log "  3. Fill in Node Name, Address, Port"
-        log "  4. Click 'Copy docker-compose.yml'"
-        log "  5. Copy the SECRET_KEY value from the docker-compose.yml"
-        log ""
-        log "Enter the SECRET_KEY below:"
-        log ""
-        
-        read -rp "  SECRET_KEY: " secret_key
-        
-        if [[ -z "$secret_key" ]]; then
-            warn "No SECRET_KEY provided, using CHANGE_ME placeholder"
-            warn "The Node will NOT work until you provide a valid SECRET_KEY"
-            secret_key="CHANGE_ME"
-        fi
-    fi
+    # Guide user to create Node in Panel UI
+    echo ""
+    log "=== Создание ноды в Panel ==="
+    log ""
+    log "  1. Открой Panel: https://$PANEL_DOMAIN"
+    log "  2. Перейди в: Nodes → Management"
+    log "  3. Нажми '+' (Add Node)"
+    log "  4. Заполни:"
+    log "     - Node Name:  (любое имя)"
+    log "     - Address:    $NODE_DOMAIN"
+    log "     - Port:       $NODE_PORT"
+    log "  5. Нажми 'Copy docker-compose.yml'"
+    log "  6. Вставь содержимое ниже:"
+    log ""
 
-    # For panel+node role, we need to guide the user to copy docker-compose from Panel
-    if [[ "$ROLE" == "panel+node" ]]; then
-        dbg "panel+node mode: Panel is local (127.0.0.1:3000)"
-        echo ""
-        log "=== Node docker-compose.yml ==="
-        log "Per official docs, you need to copy docker-compose.yml from Panel UI:"
-        log ""
-        log "  1. Open Panel: https://$PANEL_DOMAIN"
-        log "  2. Go to Nodes → Management → Click + (Add Node)"
-        log "  3. Fill in:"
-        log "     - Node Name: (your choice)"
-        log "     - Address:   $NODE_DOMAIN"
-        log "     - Port:      $NODE_PORT"
-        log "  4. Click 'Copy docker-compose.yml'"
-        log "  5. Paste the content below:"
-        echo ""
+    # Read docker-compose from user
+    local dc_content
+    echo -n "Вставь docker-compose.yml (пустая строка для завершения): "
+    dc_content=""
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && break
+        dc_content+="$line"$'\n'
+    done
 
-        # Read docker-compose from clipboard or file
-        local dc_content
-        echo -n "Paste docker-compose.yml content (end with empty line): "
-        dc_content=""
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && break
-            dc_content+="$line"$'\n'
-        done
-
-        if [[ -z "$dc_content" ]]; then
-            warn "No content pasted, generating default docker-compose.yml"
-            # Generate default based on docs (panel+node: Panel is local)
-            dc_content="services:
+    if [[ -z "$dc_content" ]]; then
+        warn "Ничего не вставлено, генерирую дефолтный docker-compose.yml"
+        local panel_host="${PANEL_HOST:-127.0.0.1}"
+        dc_content="services:
   remnanode:
     container_name: remnanode
     image: remnawave/node:latest
@@ -1516,61 +1466,18 @@ step_node() {
       - NET_ADMIN
     environment:
       - NODE_PORT=$NODE_PORT
-      - PANEL_HOST=127.0.0.1
+      - PANEL_HOST=$panel_host
       - PANEL_PORT=3000
-      - SECRET_KEY=$secret_key
+      - SECRET_KEY=CHANGE_ME
     volumes:
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
       - /opt/remnanode/ssl:/var/lib/remnawave/configs/xray/ssl:ro
 "
-        fi
-
-        echo "$dc_content" > "$nd/docker-compose.yml"
-    else
-        # For node-only role, PANEL_HOST was already asked in step_config
-        dbg "node-only mode: PANEL_HOST=$PANEL_HOST"
-        echo ""
-        log "=== Node docker-compose.yml ==="
-        log "Per official docs, copy docker-compose.yml from Panel UI:"
-        log "  1. Open Panel → Nodes → Management → Click +"
-        log "  2. Fill Address=$NODE_DOMAIN, Port=$NODE_PORT"
-        log "  3. Click 'Copy docker-compose.yml'"
-        log ""
-
-        local dc_content
-        echo -n "Paste docker-compose.yml content (end with empty line): "
-        dc_content=""
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && break
-            dc_content+="$line"$'\n'
-        done
-
-        if [[ -z "$dc_content" ]]; then
-            warn "No content pasted, generating default"
-            dc_content="services:
-  remnanode:
-    container_name: remnanode
-    image: remnawave/node:latest
-    network_mode: host
-    restart: always
-    cap_add:
-      - NET_ADMIN
-    environment:
-      - NODE_PORT=$NODE_PORT
-      - PANEL_HOST=$PANEL_HOST
-      - PANEL_PORT=3000
-      - SECRET_KEY=$secret_key
-    volumes:
-      - /var/log/remnanode:/var/log/remnanode
-      - /dev/shm:/dev/shm:rw
-      - /opt/remnanode/ssl:/var/lib/remnawave/configs/xray/ssl:ro
-"
-        fi
-
-        echo "$dc_content" > "$nd/docker-compose.yml"
+        warn "Замени CHANGE_ME на реальный SECRET_KEY из Panel"
     fi
 
+    echo "$dc_content" > "$nd/docker-compose.yml"
     ok "Node configured in $nd"
 }
 
