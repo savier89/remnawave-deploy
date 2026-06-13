@@ -204,20 +204,26 @@ EOF
 
     # Generate unified nginx config
     cat > "$pd/nginx.conf" <<EOF
+# Worker override
+worker_processes 4;
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+}
+
 # Panel upstream
 upstream remnawave {
     server 127.0.0.1:3000;
 }
 
-# Panel server block
+# Panel + Sub server block (no reuseport — HTTP proxy)
 server {
-    server_name ${PANEL_DOMAIN};
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
-    listen 443 quic reuseport;
-    listen [::]:443 quic reuseport;
+    server_name ${PANEL_DOMAIN} ${SUB_DOMAIN};
+    listen 443 ssl;
+    listen [::]:443 ssl;
     http2 on;
-    http3 on;
 
     location / {
         proxy_http_version 1.1;
@@ -252,15 +258,15 @@ server {
     gzip_types application/atom+xml application/geo+json application/javascript application/x-javascript application/json application/ld+json application/manifest+json application/rdf+xml application/rss+xml application/xhtml+xml application/xml font/eot font/otf font/ttf image/svg+xml text/css text/javascript text/plain text/xml;
 }
 
-# Node server block - VLESS + XHTTP3 proxy
+# Node server block - VLESS + XHTTP3 proxy (reuseport + QUIC for xray)
 server {
     listen 80; listen [::]:80;
     server_name $NODE_DOMAIN;
     return 301 https://\$host\$request_uri;
 }
 server {
-    listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic; listen [::]:443 quic;
+    listen 443 ssl reuseport; listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport; listen [::]:443 quic reuseport;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
@@ -294,43 +300,6 @@ server {
     }
 }
 EOF
-
-    # Add Sub server block if needed
-    if [[ "${SUB_DOMAIN:-}" != "$PANEL_DOMAIN" ]]; then
-        cat >> "$pd/nginx.conf" <<EOF
-
-# Sub server block
-server {
-    server_name ${SUB_DOMAIN};
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_pass http://remnawave;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:MozSSL:10m;
-    ssl_session_tickets off;
-    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
-    ssl_certificate "/etc/nginx/ssl/sub/fullchain.pem";
-    ssl_certificate_key "/etc/nginx/ssl/sub/privkey.key";
-    ssl_trusted_certificate "/etc/nginx/ssl/sub/fullchain.pem";
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 valid=60s;
-    resolver_timeout 2s;
-}
-EOF
-    fi
 
     # Default reject server block
     cat >> "$pd/nginx.conf" <<EOF
@@ -978,15 +947,15 @@ server {
     gzip_types application/atom+xml application/geo+json application/javascript application/x-javascript application/json application/ld+json application/manifest+json application/rdf+xml application/rss+xml application/xhtml+xml application/xml font/eot font/otf font/ttf image/svg+xml text/css text/javascript text/plain text/xml;
 }
 
-# Node server block - VLESS + XHTTP3 proxy
+# Node server block - VLESS + XHTTP3 proxy (reuseport + QUIC for xray)
 server {
     listen 80; listen [::]:80;
     server_name $NODE_DOMAIN;
     return 301 https://\$host\$request_uri;
 }
 server {
-    listen 443 ssl; listen [::]:443 ssl;
-    listen 443 quic; listen [::]:443 quic;
+    listen 443 ssl reuseport; listen [::]:443 ssl reuseport;
+    listen 443 quic reuseport; listen [::]:443 quic reuseport;
     server_name $NODE_DOMAIN;
     root /var/www/html; index index.html;
     http2 on; http3 on;
