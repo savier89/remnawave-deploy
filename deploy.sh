@@ -1192,6 +1192,7 @@ services:
     image: macbre/nginx-http3:latest
     container_name: remnawave-panel-nginx
     hostname: remnawave-panel-nginx
+    user: root
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
