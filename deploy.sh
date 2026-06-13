@@ -1409,13 +1409,20 @@ step_node() {
     if [[ -n "$api_token" && -n "${PANEL_DOMAIN:-}" ]]; then
         log "Fetching SECRET_KEY from Panel API..."
         local keygen_response
-        keygen_response=$(curl -s -H "X-API-Key: $api_token" "https://$PANEL_DOMAIN/api/keygen" 2>/dev/null || echo "")
+        keygen_response=$(curl -s -H "Authorization: Bearer $api_token" "https://$PANEL_DOMAIN/api/keygen" 2>/dev/null || echo "")
         if [[ -n "$keygen_response" ]]; then
-            secret_key=$(echo "$keygen_response" | grep -o '"secret_key":"[^"]*"' | cut -d'"' -f4 || echo "")
-            if [[ -n "$secret_key" ]]; then
-                ok "SECRET_KEY obtained from Panel API"
+            # Parse JWT public key from response
+            local pub_key_b64
+            pub_key_b64=$(echo "$keygen_response" | python3 -c "import sys,json,base64; data=json.load(sys.stdin); print(data['response']['pubKey'])" 2>/dev/null || echo "")
+            if [[ -n "$pub_key_b64" ]]; then
+                secret_key=$(echo "$pub_key_b64" | base64 -d | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['jwtPublicKey'].replace('\n',''))" 2>/dev/null || echo "")
+                if [[ -n "$secret_key" ]]; then
+                    ok "SECRET_KEY obtained from Panel API"
+                else
+                    warn "Could not parse SECRET_KEY from API response"
+                fi
             else
-                warn "Could not parse SECRET_KEY from API response"
+                warn "Could not parse pubKey from API response"
             fi
         else
             warn "Failed to fetch SECRET_KEY from Panel API"
