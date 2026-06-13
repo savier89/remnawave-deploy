@@ -831,13 +831,13 @@ step_panel() {
 
     # Change Postgres password (exact from docs)
       # Official: pw=$(openssl rand -hex 24) && sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pw/" .env \
-      #   && sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1$pw\2|" .env
-      if ! $DRY_RUN; then
-          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pg/" "$pd/.env"
-          sed -i "s|^\(DATABASE_URL=\"postgresql://postgres:[^@]*@\)\(@.*\)|\1${pg}\2|" "$pd/.env"
-      else
-          log "DRY: sed POSTGRES_PASSWORD and DATABASE_URL"
-      fi
+        #   && sed -i "s|postgresql://postgres:[^@]*@|postgresql://postgres:$pw@|" .env
+        if ! $DRY_RUN; then
+            sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pg/" "$pd/.env"
+            sed -i "s|postgresql://postgres:[^@]*@|postgresql://postgres:${pg}@|" "$pd/.env"
+        else
+            log "DRY: sed POSTGRES_PASSWORD and DATABASE_URL"
+        fi
 
     # Set domains (per official docs)
     if ! $DRY_RUN; then
