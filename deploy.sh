@@ -515,7 +515,13 @@ step_check_previous() {
         return 0
     fi
     
-    # Full cleanup for fresh installation
+    # Check for existing certificates
+    if [[ -f "/opt/remnawave/nginx/fullchain.pem" && -f "/opt/remnawave/nginx/privkey.key" ]]; then
+        warn "Existing certificates found — skipping cleanup"
+        return 0
+    fi
+
+   # Full cleanup for fresh installation
     warn "Previous installation detected — full cleanup"
     confirm "Remove ALL Remnawave/Remnanode data?" || err "Aborted"
 
