@@ -804,6 +804,23 @@ step_ssl() {
         return 0
     fi
 
+    # Check for GlobalSign wildcard cert in common locations
+    local global_sign_paths=(
+        "/root/ssl-chebu-site"
+        "/home/avedeneev/ssl-chebu-site"
+        "/opt/ssl-chebu-site"
+    )
+
+    for gs_path in "${global_sign_paths[@]}"; do
+        if [[ -f "$gs_path/fullchain.pem" && -f "$gs_path/privkey.key" ]]; then
+            run "mkdir -p $dir"
+            run "cp -f $gs_path/fullchain.pem $pem"
+            run "cp -f $gs_path/privkey.key $key"
+            ok "SSL certs copied from $gs_path (GlobalSign wildcard)"
+            return 0
+        fi
+    done
+
     run "mkdir -p $dir"
 
     # Check if certs already exist
