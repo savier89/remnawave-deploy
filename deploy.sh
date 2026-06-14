@@ -1532,28 +1532,11 @@ step_node() {
     cat > "$tmpfile"
 
     if [[ ! -s "$tmpfile" ]]; then
-        warn "Ничего не вставлено, генерирую дефолтный docker-compose.yml"
-        local panel_host="${PANEL_HOST:-127.0.0.1}"
-        cat > "$tmpfile" <<EOF
-services:
-  remnanode:
-    container_name: remnanode
-    image: remnawave/node:latest
-    network_mode: host
-    restart: always
-    cap_add:
-      - NET_ADMIN
-    environment:
-      - NODE_PORT=$NODE_PORT
-      - PANEL_HOST=$panel_host
-      - PANEL_PORT=3000
-      - SECRET_KEY=CHANGE_ME
-    volumes:
-      - /var/log/remnanode:/var/log/remnanode
-      - /dev/shm:/dev/shm:rw
-      - /opt/remnanode/ssl:/var/lib/remnawave/configs/xray/ssl:ro
-EOF
-        warn "Замени CHANGE_ME на реальный SECRET_KEY из Panel"
+        err "docker-compose.yml пуст — создай ноду в Panel и вставь docker-compose.yml\n\
+  1. Открой Panel: https://$PANEL_DOMAIN\n\
+  2. Nodes → Management → Add Node\n\
+  3. Address: $NODE_DOMAIN, Port: $NODE_PORT\n\
+  4. Нажми 'Copy docker-compose.yml' и вставь сюда (Ctrl+D для завершения)"
     fi
 
     # Validate YAML basic structure
