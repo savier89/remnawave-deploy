@@ -751,6 +751,12 @@ step_ufw() {
         ok "UFW: HTTPS (443/tcp) allowed"
     fi
 
+    # Allow HTTPS/QUIC (HTTP/3 for xray node traffic)
+    if ! ufw status | grep -q "443/udp.*ALLOW"; then
+        run "ufw allow 443/udp"
+        ok "UFW: QUIC/HTTP3 (443/udp) allowed"
+    fi
+
     # Panel-specific rules
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         # Panel web UI (behind nginx, so port 3000 is internal)
