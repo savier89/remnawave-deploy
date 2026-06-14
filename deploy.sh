@@ -89,6 +89,17 @@ Options:
   --debug             Enable debug mode (verbose output, set -x)
   --debug-file FILE   Write debug log to FILE (implies --debug)
   --config FILE       Load configuration from FILE (non-interactive mode)
+
+Config file variables:
+  EMAIL               Let's Encrypt email (required)
+  PANEL_DOMAIN        Panel domain (required for panel/panel+node)
+  SUB_DOMAIN          Subscription domain (default: PANEL_DOMAIN)
+  NODE_DOMAIN         Node domain (required for node/panel+node)
+  NODE_PORT           Node API port (default: 2222)
+  PANEL_HOST          Panel server IP (required for node-only role)
+  API_TOKEN           Panel API token (optional, for node automation)
+  SSL_CERT_DIR        Path to directory with fullchain.pem + privkey.key
+                      (skips Let's Encrypt if set)
 EOF
     exit ${1:-0}
 }
@@ -413,6 +424,30 @@ step_config() {
         log "SUB_PUBLIC_DOMAIN will be: $SUB_PUBLIC_DOMAIN"
     fi
 
+    # SSL_CERT_DIR: optional directory with pre-existing certificates (fullchain.pem + privkey.key)
+    # If set, skips Let's Encrypt entirely and copies certs from this directory
+    SSL_CERT_DIR="${SSL_CERT_DIR:-}"
+    if [[ -z "$SSL_CERT_DIR" && -z "${CONFIG_FILE:-}" ]]; then
+        log ""
+        log "Optional: Provide a directory with SSL certificates (fullchain.pem + privkey.key)"
+        log "  If set, Let's Encrypt will be skipped and certs will be copied from this directory"
+        log "  Example: /root/ssl-chebu-site or /path/to/your/certs"
+        log ""
+        read -rp "  SSL Certs directory (or press Enter to use Let's Encrypt): " ssl_dir_input
+        SSL_CERT_DIR="${ssl_dir_input:-}"
+        if [[ -n "$SSL_CERT_DIR" ]]; then
+            if [[ ! -f "$SSL_CERT_DIR/fullchain.pem" || ! -f "$SSL_CERT_DIR/privkey.key" ]]; then
+                err "SSL certificates not found in $SSL_CERT_DIR (need fullchain.pem + privkey.key)"
+            fi
+            ok "SSL certs directory: $SSL_CERT_DIR (Let's Encrypt will be skipped)"
+        fi
+    fi
+    if [[ -n "$SSL_CERT_DIR" ]]; then
+        if [[ ! -f "$SSL_CERT_DIR/fullchain.pem" || ! -f "$SSL_CERT_DIR/privkey.key" ]]; then
+            err "SSL certificates not found in $SSL_CERT_DIR (need fullchain.pem + privkey.key)"
+        fi
+    fi
+
     # PANEL_HOST only needed for node-only role (not panel+node where it's local)
     if [[ "$ROLE" == "node" ]]; then
         # Auto-detect if panel is on the same server
@@ -460,7 +495,12 @@ step_config() {
     fi
     [[ "$ROLE" == "node" ]] && log "  Panel IP:         $PANEL_HOST"
     log "  Email:            $EMAIL"
-    debug_vars "Config" ROLE EMAIL NODE_DOMAIN NODE_PORT PANEL_DOMAIN SUB_DOMAIN SUB_PUBLIC_DOMAIN PANEL_HOST
+    if [[ -n "${SSL_CERT_DIR:-}" ]]; then
+        log "  SSL Certs:        $SSL_CERT_DIR (Let's Encrypt skipped)"
+    else
+        log "  SSL Certs:        Let's Encrypt (acme.sh)"
+    fi
+    debug_vars "Config" ROLE EMAIL NODE_DOMAIN NODE_PORT PANEL_DOMAIN SUB_DOMAIN SUB_PUBLIC_DOMAIN PANEL_HOST SSL_CERT_DIR
     echo ""
     confirm "Apply this configuration?"
 }
@@ -757,6 +797,14 @@ step_ufw() {
         ok "UFW: QUIC/HTTP3 (443/udp) allowed"
     fi
 
+    # Allow acme.sh TLS-ALPN port for Let's Encrypt (only if using LE)
+    if [[ -z "${SSL_CERT_DIR:-}" ]]; then
+        if ! ufw status | grep -q "8443.*ALLOW"; then
+            run "ufw allow 8443/tcp"
+            ok "UFW: Let's Encrypt TLS-ALPN (8443/tcp) allowed"
+        fi
+    fi
+
     # Panel-specific rules
     if [[ "$ROLE" == "panel" || "$ROLE" == "panel+node" ]]; then
         # Panel web UI (behind nginx, so port 3000 is internal)
@@ -809,23 +857,6 @@ step_ssl() {
         ok "SSL certs copied from $SSL_CERT_DIR"
         return 0
     fi
-
-    # Check for GlobalSign wildcard cert in common locations
-    local global_sign_paths=(
-        "/root/ssl-chebu-site"
-        "/home/avedeneev/ssl-chebu-site"
-        "/opt/ssl-chebu-site"
-    )
-
-    for gs_path in "${global_sign_paths[@]}"; do
-        if [[ -f "$gs_path/fullchain.pem" && -f "$gs_path/privkey.key" ]]; then
-            run "mkdir -p $dir"
-            run "cp -f $gs_path/fullchain.pem $pem"
-            run "cp -f $gs_path/privkey.key $key"
-            ok "SSL certs copied from $gs_path (GlobalSign wildcard)"
-            return 0
-        fi
-    done
 
     run "mkdir -p $dir"
 
