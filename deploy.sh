@@ -1546,6 +1546,13 @@ step_node() {
 
     cp "$tmpfile" "$nd/docker-compose.yml"
     rm -f "$tmpfile"
+
+    # Add /dev/shm volume mount for XHTTP socket support (required for VLESS + XHTTP)
+    if ! grep -q '/dev/shm' "$nd/docker-compose.yml" 2>/dev/null; then
+        sed -i '/network_mode: host/a\    volumes:\n      - /dev/shm:/dev/shm:rw' "$nd/docker-compose.yml"
+        ok "Added /dev/shm volume mount for XHTTP socket"
+    fi
+
     ok "Node configured in $nd"
 }
 
