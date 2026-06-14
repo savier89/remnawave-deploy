@@ -815,10 +815,17 @@ step_ufw() {
     if [[ "$ROLE" == "node" || "$ROLE" == "panel+node" ]]; then
         # Node API port (Panel → Node communication) - restrict to Panel IP only
         if [[ "$ROLE" == "node" ]]; then
-            # node-only: PANEL_HOST is the Panel server IP
+            # node-only: detect Panel IP
+            local node_panel_ip="${PANEL_HOST}"
+            # If Panel is on same server (127.0.0.1), get Docker container IP
+            if [[ "$node_panel_ip" == "127.0.0.1" ]] && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^remnawave$"; then
+                node_panel_ip=$(docker inspect remnawave --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
+                [[ -z "$node_panel_ip" ]] && node_panel_ip="127.0.0.1"
+                log "Panel container IP detected: $node_panel_ip"
+            fi
             if ! ufw status | grep -q "${NODE_PORT}.*ALLOW"; then
-                run "ufw allow from ${PANEL_HOST} to any port ${NODE_PORT} proto tcp"
-                ok "UFW: Node API (${NODE_PORT}/tcp) allowed from $PANEL_HOST only"
+                run "ufw allow from ${node_panel_ip} to any port ${NODE_PORT} proto tcp"
+                ok "UFW: Node API (${NODE_PORT}/tcp) allowed from $node_panel_ip only"
             fi
         fi
         # panel+node: Panel is local, port 2222 is internal (localhost)
@@ -1518,19 +1525,17 @@ step_node() {
     log "  6. Вставь содержимое ниже:"
     log ""
 
-    # Read docker-compose from user
-    local dc_content
-    echo -n "Вставь docker-compose.yml (пустая строка для завершения): "
-    dc_content=""
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && break
-        dc_content+="$line"$'\n'
-    done
+    # Read docker-compose from user via temp file (avoids bash special char issues with !, $, etc.)
+    local tmpfile
+    tmpfile=$(mktemp /tmp/remnanode-compose.XXXXXX)
+    echo "Вставь docker-compose.yml (Ctrl+D для завершения):"
+    cat > "$tmpfile"
 
-    if [[ -z "$dc_content" ]]; then
+    if [[ ! -s "$tmpfile" ]]; then
         warn "Ничего не вставлено, генерирую дефолтный docker-compose.yml"
         local panel_host="${PANEL_HOST:-127.0.0.1}"
-        dc_content="services:
+        cat > "$tmpfile" <<EOF
+services:
   remnanode:
     container_name: remnanode
     image: remnawave/node:latest
@@ -1547,11 +1552,17 @@ step_node() {
       - /var/log/remnanode:/var/log/remnanode
       - /dev/shm:/dev/shm:rw
       - /opt/remnanode/ssl:/var/lib/remnawave/configs/xray/ssl:ro
-"
+EOF
         warn "Замени CHANGE_ME на реальный SECRET_KEY из Panel"
     fi
 
-    echo "$dc_content" > "$nd/docker-compose.yml"
+    # Validate YAML basic structure
+    if ! grep -q "remnanode" "$tmpfile" 2>/dev/null; then
+        err "docker-compose.yml не содержит сервиса remnanode"
+    fi
+
+    cp "$tmpfile" "$nd/docker-compose.yml"
+    rm -f "$tmpfile"
     ok "Node configured in $nd"
 }
 
@@ -1630,17 +1641,31 @@ step_start() {
         # Configure firewall for Node port
         if command -v ufw &>/dev/null; then
             local panel_ip
-            # Resolve Panel IP from PANEL_HOST (domain or IP)
-            if [[ -n "${PANEL_HOST:-}" ]]; then
+            # Detect Panel IP - check if Panel is running in Docker on this server
+            if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^remnawave$"; then
+                # Panel is running in Docker - get its container IP
+                panel_ip=$(docker inspect remnawave --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
+                if [[ -n "$panel_ip" ]]; then
+                    log "Panel container detected with IP: $panel_ip"
+                else
+                    # Fallback: try to get from Docker network
+                    panel_ip=$(docker inspect remnawave --format '{{.NetworkSettings.IPAddress}}' 2>/dev/null)
+                    [[ -z "$panel_ip" ]] && panel_ip="127.0.0.1"
+                fi
+            elif [[ -n "${PANEL_HOST:-}" ]]; then
+                # Panel on remote server - resolve PANEL_HOST
                 panel_ip=$(getent hosts "$PANEL_HOST" 2>/dev/null | head -1 | awk '{print $1}')
                 [[ -z "$panel_ip" ]] && panel_ip="${PANEL_HOST}"
             else
+                # Fallback: use local IP
                 panel_ip=$(hostname -I | awk '{print $1}')
             fi
             log "=== Firewall: Node port $NODE_PORT ==="
             log "Allowing access from 127.0.0.1 and Panel IP ($panel_ip) only"
             run "ufw allow from 127.0.0.1 to any port $NODE_PORT"
-            run "ufw allow from $panel_ip to any port $NODE_PORT comment 'Panel server'"
+            if [[ "$panel_ip" != "127.0.0.1" ]]; then
+                run "ufw allow from $panel_ip to any port $NODE_PORT comment 'Panel server'"
+            fi
             ok "Firewall configured for Node port"
         fi
     fi
