@@ -2133,6 +2133,16 @@ main() {
 # STEP 11: Post-install Panel setup (API token for Node)
 # ============================================================
 step_post_install_panel() {
+    # Skip API token prompt in non-interactive mode (--config)
+    if [[ -n "${CONFIG_FILE:-}" ]]; then
+        log "=== Post-Install: Panel API Token ==="
+        log "Non-interactive mode (--config) — skipping API token prompt"
+        log "To set API token later:"
+        log "  1. Create token in Panel: Settings → API Tokens"
+        log "  2. Save it: echo 'API_TOKEN=<token>' > /opt/remnawave/.api_token"
+        return 0
+    fi
+
     log "=== Post-Install: Panel API Token ==="
     log ""
     log "To automate Node installation in the future, the script needs"
